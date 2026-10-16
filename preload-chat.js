@@ -9,8 +9,25 @@ function notifyHost(channel, payload) {
 if (!window.__waPreloadInitialized) {
   window.__waPreloadInitialized = true;
 
+  const notificationUnreadMap = new Map();
+  let lastSelectedChatName = '';
+
   contextBridge.exposeInMainWorld('__waBridge', {
-    sendNotification: (payload) => notifyHost('whatsapp-notification', payload),
+    sendNotification: (payload) => {
+      try {
+        const sender = String(payload?.title || '').trim();
+        if (sender) {
+          const activeHeader = (
+            document.querySelector('#main header span[dir="auto"]')?.textContent || ''
+          ).trim();
+          if (! document.hasFocus() || sender !== activeHeader) {
+            notificationUnreadMap.set(sender, (notificationUnreadMap.get(sender) || 0) + 1);
+          }
+        }
+      } catch (_) {}
+      notifyHost('whatsapp-notification', payload);
+      setTimeout(sendChatListUpdate, 150);
+    },
     notificationClicked: () => notifyHost('notification-clicked')
   });
 
@@ -52,7 +69,6 @@ if (!window.__waPreloadInitialized) {
   `;
 
   const avatarCache = new Map();
-  let lastSelectedChatName = '';
 
   function getAvatarDataUrl(imgEl) {
     if (!imgEl || !imgEl.src) return '';
@@ -93,6 +109,59 @@ if (!window.__waPreloadInitialized) {
     return src.startsWith('http') ? src : '';
   }
 
+  function detectRowUnreadCount(row, rowRect, timeText) {
+    let unread = 0;
+
+    // 1. aria-label üzerinden okunmamış mesaj sayısını yakala (TR / EN)
+    const ariaEls = row.querySelectorAll('[aria-label]');
+    for (const el of ariaEls) {
+      const label = (el.getAttribute('aria-label') || '').toLowerCase();
+      if (
+        label.includes('unread') ||
+        label.includes('okunmamış') ||
+        label.includes('okunmadı')
+      ) {
+        const m = label.match(/(\d+)/) || (el.textContent || '').match(/(\d+)/);
+        if (m) {
+          unread = parseInt(m[1], 10);
+          break;
+        } else {
+          unread = 1;
+        }
+      }
+    }
+
+    // 2. Satırın sağ yarısında yer alan küçük sayı rozeti (span/div) kontrolü
+    if (!unread) {
+      const candidates = row.querySelectorAll('span, div');
+      for (const el of candidates) {
+        if (el.childElementCount === 0) {
+          const txt = (el.textContent || '').trim();
+          if (txt && txt !== timeText && /^\d{1,3}\+?$/.test(txt)) {
+            const r = el.getBoundingClientRect();
+            const inRightHalf = r.left >= rowRect.left + rowRect.width * 0.5;
+            const isBadgeSize = r.width >= 12 && r.width <= 48 && r.height >= 12 && r.height <= 32;
+            if (inRightHalf && isBadgeSize) {
+              const cs = window.getComputedStyle(el);
+              const pcs = el.parentElement ? window.getComputedStyle(el.parentElement) : null;
+              const bg = cs.backgroundColor || '';
+              const pbg = pcs ? pcs.backgroundColor || '' : '';
+              const hasBg =
+                (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') ||
+                (pbg && pbg !== 'rgba(0, 0, 0, 0)' && pbg !== 'transparent');
+              if (hasBg) {
+                unread = parseInt(txt, 10) || 1;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return unread;
+  }
+
   // #pane-side içindeki tüm sohbet satırlarını oku ve mesaj sırasına (yukarıdan aşağıya) göre diz
   function scrapeChatList() {
     const paneSide = document.getElementById('pane-side');
@@ -107,6 +176,10 @@ if (!window.__waPreloadInitialized) {
       document.querySelector('#main header span[dir="auto"]')?.textContent || ''
     ).trim();
 
+    if (activeHeaderTitle && document.hasFocus()) {
+      notificationUnreadMap.delete(activeHeaderTitle);
+    }
+
     const rawRows = Array.from(
       paneSide.querySelectorAll('[role="listitem"], [role="row"]')
     );
@@ -115,16 +188,15 @@ if (!window.__waPreloadInitialized) {
     const sortedRows = rawRows
       .map((row) => {
         const rect = row.getBoundingClientRect();
-        return { row, top: rect.top, height: rect.height };
+        return { row, top: rect.top, height: rect.height, rect };
       })
       .filter((item) => item.height > 20)
-      .sort((a, b) => a.top - b.top)
-      .map((item) => item.row);
+      .sort((a, b) => a.top - b.top);
 
     const results = [];
     const seenNames = new Set();
 
-    sortedRows.forEach((row, idx) => {
+    sortedRows.forEach(({ row, rect: rowRect }, idx) => {
       try {
         const titleSpans = Array.from(
           row.querySelectorAll('span[dir="auto"][title], span[title]')
@@ -182,43 +254,11 @@ if (!window.__waPreloadInitialized) {
           }
         }
 
-        let unread = 0;
-        const ariaEls = row.querySelectorAll('[aria-label]');
-        for (const el of ariaEls) {
-          const label = (el.getAttribute('aria-label') || '').toLowerCase();
-          if (label.includes('unread') || label.includes('okunmamış')) {
-            const m = label.match(/(\d+)/) || (el.textContent || '').match(/(\d+)/);
-            if (m) {
-              unread = parseInt(m[1], 10);
-              break;
-            } else {
-              unread = 1;
-            }
-          }
+        const domUnread = detectRowUnreadCount(row, rowRect, time);
+        if (domUnread === 0 && activeHeaderTitle === name && document.hasFocus()) {
+          notificationUnreadMap.delete(name);
         }
-        if (!unread) {
-          const spans = row.querySelectorAll('span');
-          for (const sp of spans) {
-            if (sp.childElementCount === 0) {
-              const txt = (sp.textContent || '').trim();
-              if (/^\d{1,3}$/.test(txt)) {
-                const bg = window.getComputedStyle(sp).backgroundColor || '';
-                const parentBg = sp.parentElement
-                  ? window.getComputedStyle(sp.parentElement).backgroundColor || ''
-                  : '';
-                if (
-                  bg.includes('0, 168, 132') ||
-                  bg.includes('37, 211, 102') ||
-                  parentBg.includes('0, 168, 132') ||
-                  parentBg.includes('37, 211, 102')
-                ) {
-                  unread = parseInt(txt, 10);
-                  break;
-                }
-              }
-            }
-          }
-        }
+        const unread = Math.max(domUnread, notificationUnreadMap.get(name) || 0);
 
         const isRowSelected =
           row.getAttribute('aria-selected') === 'true' ||
@@ -256,6 +296,7 @@ if (!window.__waPreloadInitialized) {
 
     const chatName = row.getAttribute('data-wa-chat-name') || 'unknown';
     lastSelectedChatName = chatName;
+    notificationUnreadMap.delete(chatName);
 
     document
       .querySelectorAll('[data-wa-click-now]')
@@ -370,6 +411,6 @@ if (!window.__waPreloadInitialized) {
       }
 
       sendChatListUpdate();
-    }, 1200);
+    }, 1000);
   });
 }

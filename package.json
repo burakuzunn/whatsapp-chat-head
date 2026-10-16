@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-chat-head",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Masaüstü Yüzen WhatsApp Baloncuğu ve Dikey Sohbet Avatarları (Windows)",
   "main": "main.js",
   "scripts": {

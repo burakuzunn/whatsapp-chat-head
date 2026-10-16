@@ -520,9 +520,17 @@ ipcMain.on('close-selector-window', () => {
   }
 });
 
+let titleUnreadCount = 0;
+
 ipcMain.on('chat-list-from-webview', (_event, list) => {
   if (Array.isArray(list)) {
     cachedChatList = list;
+    const listUnreadTotal = cachedChatList.reduce(
+      (sum, item) => sum + (Number(item.unread) || 0),
+      0
+    );
+    updateUnreadBadge(Math.max(titleUnreadCount, listUnreadTotal));
+
     if (bubbleWin && !bubbleWin.isDestroyed()) {
       bubbleWin.webContents.send('update-chat-list', cachedChatList);
     }
@@ -564,7 +572,12 @@ ipcMain.on('notification-clicked', () => {
 });
 
 ipcMain.on('unread-count-updated', (_event, count) => {
-  updateUnreadBadge(count);
+  titleUnreadCount = Number(count) || 0;
+  const listUnreadTotal = cachedChatList.reduce(
+    (sum, item) => sum + (Number(item.unread) || 0),
+    0
+  );
+  updateUnreadBadge(Math.max(titleUnreadCount, listUnreadTotal));
 });
 
 ipcMain.on('toggle-pin-from-chat', () => {
@@ -581,27 +594,8 @@ ipcMain.on('hide-chat-from-toolbar', () => {
   hideChatWindows();
 });
 
-function notifyUpdateStatus(msg) {
-  if (bubbleWin && !bubbleWin.isDestroyed()) {
-    bubbleWin.webContents.send('trigger-pulse', msg);
-  }
-  if (chatWin && !chatWin.isDestroyed()) {
-    chatWin.webContents.send('update-status-message', msg);
-  }
-}
-
-function triggerUpdateCheck(manual = false) {
-  if (manual) {
-    notifyUpdateStatus('Güncellemeler kontrol ediliyor...');
-  }
-  checkAndApplyUpdate({
-    app,
-    onStatus: (msg) => notifyUpdateStatus(msg)
-  }).then((res) => {
-    if (manual && res && !res.updated) {
-      notifyUpdateStatus(`Güncel sürüm kullanılıyor (v${getLocalVersion()})`);
-    }
-  });
+function triggerUpdateCheck() {
+  checkAndApplyUpdate({ app }).catch(() => {});
 }
 
 // IPC: Sağ Tık Menüsü (Context Menu)
@@ -639,10 +633,6 @@ ipcMain.on('bubble-contextmenu', () => {
     },
     { type: 'separator' },
     {
-      label: `⬆️ Güncellemeleri Kontrol Et (v${getLocalVersion()})`,
-      click: () => triggerUpdateCheck(true)
-    },
-    {
       label: '🔄 WhatsApp Web Yenile',
       click: () => {
         if (chatWin && !chatWin.isDestroyed()) {
@@ -672,9 +662,9 @@ app.whenReady().then(() => {
     openChatNearBubble();
   }, 400);
 
-  // Otomatik Güncelleme Kontrolü: Başlangıçta (3 sn sonra) ve her 2 dakikada bir GitHub Release kontrolü
-  setTimeout(() => triggerUpdateCheck(false), 3000);
-  setInterval(() => triggerUpdateCheck(false), 2 * 60 * 1000);
+  // Sessiz Otomatik Güncelleme Kontrolü: Başlangıçta (3 sn sonra) ve her 2 dakikada bir
+  setTimeout(() => triggerUpdateCheck(), 3000);
+  setInterval(() => triggerUpdateCheck(), 2 * 60 * 1000);
 
   // Global Kısayol: Alt + W ile her yerden hızlıca aç/kapat
   globalShortcut.register('Alt+W', () => {

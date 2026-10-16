@@ -14,19 +14,18 @@ irm https://raw.githubusercontent.com/burakuzunn/whatsapp-chat-head/main/install
 
 ---
 
-## ⬆️ Otomatik Güncelleme Sistemi (GitHub Releases)
+## 🤖 Sıfır Müdahale (Zero-Touch) Otomatik Yayınlama & Güncelleme Sistemi
 
-Uygulama içinde yerleşik **otomatik güncelleme (`updater.js`)** sistemi bulunur:
-- Uygulama her açılışta ve arka planda her 10 dakikada bir GitHub'daki en son **Release** sürümünü kontrol eder.
-- Ayrıca WhatsApp ikonuna sağ tıklayıp **⬆️ Güncellemeleri Kontrol Et** seçeneğiyle anlık kontrol yapılabilir.
-- GitHub'da yeni bir **Release** yayınlandığında (ör. `v1.0.1`, `v1.1.0`), uygulama yeniden kurulum gerektirmeden sadece değişen dosyaları saniyeler içinde indirip kendini otomatik olarak yeniden başlatır.
+Bu projede hem **sürüm yayınlama (Release)** hem de **istemci güncelleme (Auto-Update)** süreçleri tamamen otomatiktir:
 
-### Geliştirici İçin Yeni Sürüm (Release) Yayınlama
-Kodda bir değişiklik yaptıktan sonra tek komutla sürüm numarasını artırıp GitHub Release yayınlamak için:
-```bash
-npm run release
-```
-(Veya belirli bir sürüm etiketiyle: `npm run release -- 1.2.0 "Yeni özellik eklendi"`)
+1. **Otomatik Sürüm Yayınlama (`.agents/rules/auto-release.md` & `release.js`):**
+   - Yapay zeka asistanı projede herhangi bir kod veya tasarım değişikliği yaptığı anda, kullanıcıdan hiçbir komut beklemeden otomatik olarak `node release.js` çalıştırır.
+   - `release.js` otomatik olarak `package.json` sürümünü (`patch`) artırır, `git commit` + `git push origin main` yapar ve GitHub REST API üzerinden anında yeni **GitHub Release** (`v1.0.x`) oluşturur.
+   - Ek olarak `.github/workflows/auto-release.yml` (GitHub Actions) sayesinde `main` dalına yapılan her push işlemi sunucu tarafında da kontrol edilerek Release oluşturulması garanti altına alınır.
+2. **İstemci Tarafında Otomatik Güncelleme (`updater.js`):**
+   - Uygulama açılışta (3. saniyede) ve arka planda **her 2 dakikada bir** GitHub'daki son **Release** sürümünü kontrol eder.
+   - Yeni sürüm tespit edildiğinde Electron'u baştan indirmeden yalnızca değişen kaynak dosyaları (~50 KB) saniyeler içinde indirip günceller ve **WhatsApp oturumunu kapatmadan kendini otomatik olarak yeniden başlatır**.
+   - İstenirse WhatsApp baloncuğuna sağ tıklayıp **⬆️ Güncellemeleri Kontrol Et** seçeneğiyle anlık kontrol de yapılabilir.
 
 ---
 

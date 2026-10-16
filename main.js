@@ -672,9 +672,9 @@ app.whenReady().then(() => {
     openChatNearBubble();
   }, 400);
 
-  // Otomatik Güncelleme Kontrolü: Başlangıçta (3 sn sonra) ve her 10 dakikada bir GitHub Release kontrolü
+  // Otomatik Güncelleme Kontrolü: Başlangıçta (3 sn sonra) ve her 2 dakikada bir GitHub Release kontrolü
   setTimeout(() => triggerUpdateCheck(false), 3000);
-  setInterval(() => triggerUpdateCheck(false), 10 * 60 * 1000);
+  setInterval(() => triggerUpdateCheck(false), 2 * 60 * 1000);
 
   // Global Kısayol: Alt + W ile her yerden hızlıca aç/kapat
   globalShortcut.register('Alt+W', () => {

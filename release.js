@@ -75,10 +75,15 @@ function createGithubRelease(token, tagName, releaseTitle, releaseNotes) {
   const pkgPath = path.join(__dirname, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
 
-  const argVer = process.argv[2] ? process.argv[2].replace(/^v/i, '') : null;
-  const nextVersion = argVer || bumpPatch(pkg.version);
+  const firstArg = process.argv[2] || '';
+  const isExplicitVersion = /^v?\d+\.\d+\.\d+$/.test(firstArg.trim());
+
+  const nextVersion = isExplicitVersion
+    ? firstArg.trim().replace(/^v/i, '')
+    : bumpPatch(pkg.version);
   const tagName = `v${nextVersion}`;
-  const notes = process.argv.slice(3).join(' ') || `Otomatik güncelleme paketi (${tagName})`;
+  const noteArgs = isExplicitVersion ? process.argv.slice(3) : process.argv.slice(2);
+  const notes = noteArgs.join(' ').trim() || `Otomatik güncelleme paketi (${tagName})`;
 
   pkg.version = nextVersion;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8');
@@ -86,16 +91,20 @@ function createGithubRelease(token, tagName, releaseTitle, releaseNotes) {
 
   execSync('git add .', { stdio: 'inherit' });
   try {
-    execSync(`git commit -m "release: ${tagName}"`, { stdio: 'inherit' });
+    execSync(`git commit -m "release(${tagName}): ${notes}"`, { stdio: 'inherit' });
   } catch (_) {}
   execSync('git push origin main', { stdio: 'inherit' });
 
   const token = getGithubToken();
   if (!token) {
-    console.log('==> Git push tamamlandı. GitHub token bulunamadığı için Release web üzerinden açılabilir.');
+    console.log('==> Git push tamamlandı. GitHub Actions üzerinden Release otomatik oluşturulacak.');
     return;
   }
 
-  const rel = await createGithubRelease(token, tagName, `Release ${tagName}`, notes);
-  console.log(`==> GitHub Release yayınlandı: ${rel.html_url}`);
+  try {
+    const rel = await createGithubRelease(token, tagName, `Release ${tagName}`, notes);
+    console.log(`==> GitHub Release anında yayınlandı: ${rel.html_url}`);
+  } catch (err) {
+    console.warn('==> GitHub API uyarısı (GitHub Actions devralacak):', err.message);
+  }
 })();

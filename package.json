@@ -1,0 +1,14 @@
+{
+  "name": "whatsapp-chat-head",
+  "version": "1.0.0",
+  "description": "Masaüstü Yüzen WhatsApp Baloncuğu ve Dikey Sohbet Avatarları (Windows)",
+  "main": "main.js",
+  "scripts": {
+    "postinstall": "node setup.js",
+    "start": "electron .",
+    "silent": "wscript.exe baslat.vbs"
+  },
+  "dependencies": {
+    "electron": "^33.2.0"
+  }
+}

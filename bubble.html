@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  html, body {
+    width: 72px;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: 6px;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .bubble-wrapper {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 20;
+  }
+  .bubble-btn {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: #25D366;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .wa-icon {
+    width: 30px;
+    height: 30px;
+    fill: #ffffff;
+    pointer-events: none;
+  }
+  /* Kırmızı Okunmamış Mesaj Rozeti (Ana WhatsApp İkonu) */
+  .badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 10px;
+    background: #FF3B30;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 20px;
+    text-align: center;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .badge.visible {
+    display: flex;
+  }
+  /* Sabitlenme (Pin) İndikatörü */
+  .pin-dot {
+    position: absolute;
+    bottom: 0px;
+    right: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #007AFF;
+    display: none;
+    pointer-events: none;
+    z-index: 9;
+  }
+  .pin-dot.visible {
+    display: block;
+  }
+
+  /* WhatsApp İkonunun Altından Aşağıya Doğru Pencere Boyutu Kadar İnen Düz Sohbet Avatarları Sütunu */
+  .avatar-dock {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    margin-top: 8px;
+    padding: 2px 0;
+    gap: 10px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+  }
+  .avatar-dock::-webkit-scrollbar {
+    display: none;
+  }
+  body.expanded .avatar-dock {
+    display: flex;
+  }
+
+  .avatar-item {
+    position: relative;
+    width: 50px;
+    height: 50px;
+    flex-shrink: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .avatar-circle {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #2a3942;
+    border: none;
+    box-shadow: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .avatar-circle img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none;
+  }
+
+  /* Avatarların Üzerindeki Düz Kırmızı Bildirim Sayısı Rozeti */
+  .avatar-badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: #FF3B30;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div class="bubble-wrapper" id="bubble" title="WhatsApp Sohbet Baloncuğu (Alt + W)">
+    <div class="bubble-btn" id="bubbleBtn">
+      <svg class="wa-icon" viewBox="0 0 24 24">
+        <path d="M12.031 2c-5.506 0-9.989 4.478-9.99 9.984a9.964 9.964 0 0 0 1.333 4.993L2 22l5.233-1.237a9.994 9.994 0 0 0 4.779 1.217h.004c5.505 0 9.988-4.478 9.989-9.984 0-2.669-1.037-5.176-2.922-7.062A9.935 9.935 0 0 0 12.031 2zm5.829 14.12c-.246.693-1.438 1.326-1.988 1.411-.51.078-1.155.111-1.868-.116-.434-.138-.99-.324-1.699-.631-2.987-1.291-4.937-4.302-5.086-4.502-.149-.199-1.214-1.615-1.214-3.081 0-1.466.768-2.186 1.04-2.485.273-.299.594-.374.792-.374.198 0 .396.002.57.01.183.009.427-.07.669.511.248.598.842 2.059.916 2.208.074.149.124.324.025.523-.099.199-.149.324-.297.498-.149.174-.313.389-.446.523-.149.149-.303.311-.13.609.173.299.769 1.269 1.651 2.055 1.135 1.012 2.091 1.326 2.388 1.475.297.149.47.124.644-.075.173-.199.743-.866.941-1.165.198-.299.396-.249.669-.149.273.099 1.733.817 2.03.966.297.149.495.224.57.349.074.124.074.719-.172 1.412z"/>
+      </svg>
+    </div>
+    <div class="badge" id="badge">0</div>
+    <div class="pin-dot" id="pinDot"></div>
+  </div>
+
+  <div class="avatar-dock" id="avatarDock"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const bubble = document.getElementById('bubble');
+    const badge = document.getElementById('badge');
+    const pinDot = document.getElementById('pinDot');
+    const avatarDock = document.getElementById('avatarDock');
+
+    const PALETTE = [
+      '#00a884', '#0088cc', '#8e44ad', '#e67e22',
+      '#d35400', '#2980b9', '#16a085', '#c0392b'
+    ];
+
+    function getColorForName(name) {
+      let hash = 0;
+      const str = String(name || '');
+      for (let i = 0; i < str.length; i++) {
+        hash = str.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      return PALETTE[Math.abs(hash) % PALETTE.length];
+    }
+
+    function getInitials(name) {
+      if (!name) return '?';
+      const parts = String(name).trim().split(/\s+/);
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+      }
+      return String(name).slice(0, 2).toUpperCase();
+    }
+
+    let isPointerDown = false;
+    let activeChatName = '';
+
+    bubble.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        isPointerDown = true;
+        ipcRenderer.send('bubble-mousedown');
+      }
+    });
+
+    window.addEventListener('mousemove', () => {
+      if (isPointerDown) {
+        ipcRenderer.send('bubble-mousemove');
+      }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0 && isPointerDown) {
+        isPointerDown = false;
+        ipcRenderer.send('bubble-mouseup');
+      }
+    });
+
+    bubble.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      ipcRenderer.send('bubble-contextmenu');
+    });
+
+    ipcRenderer.on('set-expanded', (_event, expanded) => {
+      document.body.classList.toggle('expanded', Boolean(expanded));
+    });
+
+    ipcRenderer.on('update-chat-list', (_event, list) => {
+      if (!Array.isArray(list)) return;
+      const prevScroll = avatarDock.scrollTop;
+      avatarDock.innerHTML = '';
+
+      list.forEach((chat) => {
+        const item = document.createElement('div');
+        const isActive = Boolean(chat.active) || (activeChatName && chat.name === activeChatName);
+        item.className =
+          'avatar-item' +
+          (isActive ? ' active' : '') +
+          (chat.unread > 0 ? ' has-unread' : '');
+        item.title =
+          chat.name + (chat.unread > 0 ? ' (' + chat.unread + ' okunmamış mesaj)' : '');
+
+        const circle = document.createElement('div');
+        circle.className = 'avatar-circle';
+
+        if (chat.avatar) {
+          const img = document.createElement('img');
+          img.src = chat.avatar;
+          img.alt = chat.name || '';
+          img.onerror = () => {
+            circle.innerHTML = '';
+            circle.style.background = getColorForName(chat.name);
+            circle.textContent = getInitials(chat.name);
+          };
+          circle.appendChild(img);
+        } else {
+          circle.style.background = getColorForName(chat.name);
+          circle.textContent = getInitials(chat.name);
+        }
+
+        item.appendChild(circle);
+
+        if (chat.unread && chat.unread > 0) {
+          const b = document.createElement('div');
+          b.className = 'avatar-badge';
+          b.textContent = chat.unread > 99 ? '99+' : String(chat.unread);
+          item.appendChild(b);
+        }
+
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          activeChatName = chat.name;
+          Array.from(avatarDock.querySelectorAll('.avatar-item')).forEach((el) =>
+            el.classList.remove('active')
+          );
+          item.classList.add('active');
+          ipcRenderer.send('selector-pick-chat', {
+            name: chat.name,
+            index: chat.index
+          });
+        });
+
+        avatarDock.appendChild(item);
+      });
+
+      avatarDock.scrollTop = prevScroll;
+    });
+
+    ipcRenderer.on('update-badge', (_event, count) => {
+      if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.classList.add('visible');
+      } else {
+        badge.textContent = '0';
+        badge.classList.remove('visible');
+      }
+    });
+
+    ipcRenderer.on('trigger-pulse', (_event, tooltipText) => {
+      if (tooltipText) {
+        bubble.title = tooltipText;
+      }
+    });
+
+    ipcRenderer.on('update-pin-state', (_event, pinned) => {
+      if (pinned) {
+        pinDot.classList.add('visible');
+      } else {
+        pinDot.classList.remove('visible');
+      }
+    });
+  </script>
+</body>
+</html>

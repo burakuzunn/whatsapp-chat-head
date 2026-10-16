@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #111b21;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+  }
+  /* Üst Özel Kontrol Barı */
+  .toolbar {
+    height: 40px;
+    min-height: 40px;
+    background: linear-gradient(180deg, #202c33 0%, #111b21 100%);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    gap: 6px;
+    z-index: 100;
+  }
+  .tb-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tb-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #e9edef;
+    border-radius: 6px;
+    padding: 5px 11px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .tb-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+  }
+  .tb-btn.primary {
+    background: #00a884;
+    border-color: #00a884;
+    color: #111b21;
+  }
+  .tb-btn.primary:hover {
+    background: #06cf9c;
+  }
+  .tb-btn.active {
+    background: #00a884;
+    border-color: #00a884;
+    color: #111b21;
+  }
+  .tb-btn.icon-only {
+    padding: 4px 8px;
+    font-weight: 500;
+  }
+  /* WhatsApp Webview Alanı (Sadece Aktif Sohbet) */
+  #waWebview {
+    flex: 1;
+    width: 100%;
+    height: calc(100% - 40px);
+    border: none;
+    background: #111b21;
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="tb-group">
+      <button class="tb-btn primary" id="btnOpenSelector" title="Harici Kutu Aç ve Başka Sohbet Seç">
+        👥 Sohbet Seç
+      </button>
+    </div>
+    <div class="tb-group">
+      <button class="tb-btn icon-only" id="btnBlur" title="Gizlilik Modu (Mesajları Bulanıklaştır)">👁️</button>
+      <button class="tb-btn icon-only" id="btnPin" title="Pencereyi Sabitle (Otomatik Gizlemeyi Kapat)">📌</button>
+      <button class="tb-btn icon-only" id="btnHide" title="Baloncuğa Küçült (Alt+W)">➖</button>
+    </div>
+  </div>
+
+  <webview
+    id="waWebview"
+    partition="persist:whatsapp"
+    allowpopups
+  ></webview>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const path = require('path');
+    const { pathToFileURL } = require('url');
+
+    const webview = document.getElementById('waWebview');
+    const btnOpenSelector = document.getElementById('btnOpenSelector');
+    const btnBlur = document.getElementById('btnBlur');
+    const btnPin = document.getElementById('btnPin');
+    const btnHide = document.getElementById('btnHide');
+
+    const preloadUrl = pathToFileURL(path.join(__dirname, 'preload-chat.js')).href;
+    webview.setAttribute('preload', preloadUrl);
+    webview.setAttribute(
+      'useragent',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    );
+    webview.setAttribute('src', 'https://web.whatsapp.com');
+
+    let isBlurred = false;
+
+    // Pencerede SADECE aktif sohbet (#main) görünür; sol liste arka planda görünmez tutularak
+    // harici seçim kutusuna canlı veri sağlar.
+    const CHAT_ONLY_CSS = `
+      #app,
+      #app > div,
+      #app > div > div,
+      ._aigs,
+      .two,
+      .three {
+        min-width: 0 !important;
+        min-height: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+      }
+
+      /* Sol dikey ikon şeridi ve sol sohbet listesini (#side) arka planda görünmez tut */
+      header:not(#main header),
+      div:has(> #side),
+      .two > div:not(:has(#main)) {
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+
+      div:has(> #side) {
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 340px !important;
+        height: 100vh !important;
+        z-index: -1 !important;
+      }
+
+      /* Sadece sağdaki sohbet ekranı (#main) pencerenin %100'ünü kaplasın */
+      div:has(> #main) {
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        max-width: 100vw !important;
+        min-width: 100vw !important;
+        display: flex !important;
+        flex-direction: column !important;
+        z-index: 9999 !important;
+        background: #111b21 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+
+      #main {
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 1 100% !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100% !important;
+        min-width: 100% !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+
+      /* Mesaj Balonları & Yazma Alanı */
+      #main [role="application"] [role="row"] > div {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+      }
+      #main .message-in,
+      #main .message-out {
+        max-width: 88% !important;
+      }
+
+      /* Gizlilik (Blur) Modu */
+      html.wa-privacy-blur [role="row"] span[dir="auto"],
+      html.wa-privacy-blur .message-in,
+      html.wa-privacy-blur .message-out,
+      html.wa-privacy-blur img {
+        filter: blur(6px) !important;
+        transition: filter 0.18s ease !important;
+      }
+      html.wa-privacy-blur [role="row"]:hover span[dir="auto"],
+      html.wa-privacy-blur .message-in:hover,
+      html.wa-privacy-blur .message-out:hover,
+      html.wa-privacy-blur img:hover {
+        filter: blur(0px) !important;
+      }
+
+      ::-webkit-scrollbar {
+        width: 5px !important;
+        height: 5px !important;
+      }
+    `;
+
+    // "👥 Sohbet Seç" butonuna basıldığında Harici Seçim Kutusunu (selectorWin) aç/kapat
+    btnOpenSelector.addEventListener('click', () => {
+      try {
+        webview.send('request-chat-list');
+      } catch (_) {}
+      ipcRenderer.send('toggle-selector-window');
+    });
+
+    btnBlur.addEventListener('click', () => {
+      isBlurred = !isBlurred;
+      btnBlur.classList.toggle('active', isBlurred);
+      try {
+        webview.executeJavaScript(`
+          document.documentElement.classList.toggle('wa-privacy-blur', ${isBlurred});
+        `).catch(() => {});
+      } catch (_) {}
+    });
+
+    btnPin.addEventListener('click', () => {
+      ipcRenderer.send('toggle-pin-from-chat');
+    });
+
+    btnHide.addEventListener('click', () => {
+      ipcRenderer.send('hide-chat-from-toolbar');
+    });
+
+    ipcRenderer.on('pin-state-changed', (_event, pinned) => {
+      btnPin.classList.toggle('active', Boolean(pinned));
+    });
+
+    // Harici seçim kutusundan bir sohbet seçildiğinde webview içindeki o kişiye tıkla
+    ipcRenderer.on('forward-pick-chat', (_event, target) => {
+      try {
+        webview.send('pick-chat-in-webview', target);
+      } catch (_) {}
+    });
+
+    ipcRenderer.on('forward-scroll-more', () => {
+      try {
+        webview.send('scroll-pane-side');
+      } catch (_) {}
+    });
+
+    webview.addEventListener('dom-ready', () => {
+      webview.insertCSS(CHAT_ONLY_CSS).catch(() => {});
+    });
+
+    // Sayfa başlığından okunmamış mesaj sayısını yakala
+    webview.addEventListener('page-title-updated', (e) => {
+      const title = e.title || '';
+      const match = title.match(/\((\d+)\)/);
+      if (match && match[1]) {
+        const count = parseInt(match[1], 10);
+        ipcRenderer.send('unread-count-updated', count);
+        btnOpenSelector.textContent = `👥 Sohbet Seç (${count})`;
+      } else if (title.includes('WhatsApp')) {
+        ipcRenderer.send('unread-count-updated', 0);
+        btnOpenSelector.textContent = '👥 Sohbet Seç';
+      }
+    });
+
+    // Webview preload'dan gelen mesajları ana sürece (main.js) ilet
+    webview.addEventListener('ipc-message', (event) => {
+      if (event.channel === 'chat-list-updated') {
+        ipcRenderer.send('chat-list-from-webview', event.args[0]);
+      } else if (event.channel === 'whatsapp-notification') {
+        ipcRenderer.send('whatsapp-notification', event.args[0]);
+      } else if (event.channel === 'notification-clicked') {
+        ipcRenderer.send('notification-clicked');
+      }
+    });
+  </script>
+</body>
+</html>

@@ -10,6 +10,7 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { getLocalVersion, checkAndApplyUpdate } = require('./updater');
 
 // Güncel Windows Chrome User-Agent (WhatsApp Web tarayıcı uyarısını engeller)
@@ -32,12 +33,21 @@ let cachedChatList = [];
 let isQuitting = false;
 let isPinned = false;
 let isMuted = false;
+let isLocked = false;
+let lockPasswordHash = '';
 let lastUnreadCount = 0;
 let ignoreBlurUntil = 0;
 let hasInitializedChatState = false;
 const prevChatStateMap = new Map();
 let lastPreviewKey = '';
 let lastPreviewTime = 0;
+
+function hashPassword(pw) {
+  return crypto
+    .createHash('sha256')
+    .update(String(pw || '').trim())
+    .digest('hex');
+}
 
 // Sürükleme durumu (Main Process)
 let dragInterval = null;
@@ -58,23 +68,44 @@ if (!gotTheLock) {
   });
 }
 
-// Konum kaydetme / yükleme yardımcı fonksiyonları
+// Konum ve kilit ayarlarını kaydetme / yükleme yardımcı fonksiyonları
 function getConfigPath() {
   return path.join(app.getPath('userData'), 'bubble-config.json');
 }
 
-function loadSavedPosition() {
+function readConfigData() {
   try {
     const cfgPath = getConfigPath();
     if (fs.existsSync(cfgPath)) {
-      const data = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-      if (typeof data.x === 'number' && typeof data.y === 'number') {
-        const display = screen.getDisplayNearestPoint({ x: data.x, y: data.y });
-        const wa = display.workArea;
-        const clampedX = Math.max(wa.x, Math.min(data.x, wa.x + wa.width - BUBBLE_SIZE));
-        const clampedY = Math.max(wa.y, Math.min(data.y, wa.y + wa.height - BUBBLE_SIZE));
-        return { x: clampedX, y: clampedY };
-      }
+      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) || {};
+    }
+  } catch (_) {}
+  return {};
+}
+
+function writeConfigData(patch) {
+  try {
+    const current = readConfigData();
+    const merged = { ...current, ...patch };
+    fs.writeFileSync(getConfigPath(), JSON.stringify(merged, null, 2), 'utf-8');
+  } catch (_) {}
+}
+
+function loadSavedPosition() {
+  try {
+    const data = readConfigData();
+    if (typeof data.passwordHash === 'string') {
+      lockPasswordHash = data.passwordHash;
+    }
+    if (lockPasswordHash && data.isLocked) {
+      isLocked = true;
+    }
+    if (typeof data.x === 'number' && typeof data.y === 'number') {
+      const display = screen.getDisplayNearestPoint({ x: data.x, y: data.y });
+      const wa = display.workArea;
+      const clampedX = Math.max(wa.x, Math.min(data.x, wa.x + wa.width - BUBBLE_SIZE));
+      const clampedY = Math.max(wa.y, Math.min(data.y, wa.y + wa.height - BUBBLE_SIZE));
+      return { x: clampedX, y: clampedY };
     }
   } catch (_) {}
 
@@ -94,8 +125,45 @@ function saveBubblePosition() {
   if (!bubbleWin || bubbleWin.isDestroyed()) return;
   try {
     const b = bubbleWin.getBounds();
-    fs.writeFileSync(getConfigPath(), JSON.stringify({ x: b.x, y: b.y }), 'utf-8');
+    writeConfigData({
+      x: b.x,
+      y: b.y,
+      passwordHash: lockPasswordHash,
+      isLocked
+    });
   } catch (_) {}
+}
+
+function syncLockStateToWindows() {
+  writeConfigData({
+    passwordHash: lockPasswordHash,
+    isLocked
+  });
+  if (bubbleWin && !bubbleWin.isDestroyed()) {
+    bubbleWin.webContents.send('update-lock-state', isLocked);
+  }
+  if (chatWin && !chatWin.isDestroyed()) {
+    chatWin.webContents.send('lock-state-updated', {
+      isLocked,
+      hasPassword: Boolean(lockPasswordHash)
+    });
+  }
+  if (isLocked && selectorWin && !selectorWin.isDestroyed() && selectorWin.isVisible()) {
+    selectorWin.hide();
+  }
+}
+
+function requestLockWhatsApp() {
+  ignoreBlurUntil = Date.now() + 800;
+  if (!lockPasswordHash) {
+    openChatNearBubble();
+    if (chatWin && !chatWin.isDestroyed()) {
+      chatWin.webContents.send('open-lock-setup');
+    }
+    return;
+  }
+  isLocked = true;
+  syncLockStateToWindows();
 }
 
 function isCursorInsideWindow(win) {
@@ -177,13 +245,23 @@ function hidePreviewBubble() {
 function showPreviewBubble(data) {
   if (!previewWin || previewWin.isDestroyed()) return;
   const tailDirection = positionPreviewWindow();
-  previewWin.webContents.send('show-preview-data', {
-    name: data.name || 'WhatsApp',
-    body: data.body || 'Yeni mesaj',
-    avatar: data.avatar || '',
-    index: data.index,
-    tailDirection
-  });
+  if (isLocked) {
+    previewWin.webContents.send('show-preview-data', {
+      name: '🔒 WhatsApp Kilitli',
+      body: 'Yeni şifreli mesaj geldi',
+      avatar: '',
+      index: data.index,
+      tailDirection
+    });
+  } else {
+    previewWin.webContents.send('show-preview-data', {
+      name: data.name || 'WhatsApp',
+      body: data.body || 'Yeni mesaj',
+      avatar: data.avatar || '',
+      index: data.index,
+      tailDirection
+    });
+  }
   previewWin.showInactive();
 
   if (previewHideTimer) clearTimeout(previewHideTimer);
@@ -672,6 +750,7 @@ ipcMain.on('bubble-mouseup', () => {
 
 // IPC: Harici Sohbet Seçim Kutusunu (selectorWin) Aç/Kapat
 ipcMain.on('toggle-selector-window', () => {
+  if (isLocked) return;
   if (!selectorWin || selectorWin.isDestroyed()) return;
   ignoreBlurUntil = Date.now() + 500;
 
@@ -696,6 +775,54 @@ ipcMain.on('close-selector-window', () => {
   if (chatWin && !chatWin.isDestroyed() && chatWin.isVisible()) {
     chatWin.focus();
   }
+});
+
+// IPC: Şifreli Kilit (WhatsApp App Lock) İşlemleri
+ipcMain.on('request-lock-whatsapp', () => {
+  requestLockWhatsApp();
+});
+
+ipcMain.on('lock-set-password', (_event, newPass) => {
+  const trimmed = String(newPass || '').trim();
+  if (!trimmed) return;
+  lockPasswordHash = hashPassword(trimmed);
+  isLocked = true;
+  syncLockStateToWindows();
+});
+
+ipcMain.on('lock-verify-password', (_event, pass) => {
+  const trimmed = String(pass || '').trim();
+  if (!lockPasswordHash || hashPassword(trimmed) === lockPasswordHash) {
+    isLocked = false;
+    syncLockStateToWindows();
+  } else if (chatWin && !chatWin.isDestroyed()) {
+    chatWin.webContents.send('lock-error-message', 'Hatalı şifre, tekrar deneyin.');
+  }
+});
+
+ipcMain.on('lock-change-password', (_event, payload) => {
+  const curPass = String(payload?.currentPassword || '').trim();
+  const newPass = String(payload?.newPassword || '').trim();
+
+  if (lockPasswordHash && hashPassword(curPass) !== lockPasswordHash) {
+    if (chatWin && !chatWin.isDestroyed()) {
+      chatWin.webContents.send('lock-error-message', 'Mevcut şifreniz hatalı!');
+    }
+    return;
+  }
+
+  if (newPass) {
+    lockPasswordHash = hashPassword(newPass);
+    isLocked = true;
+  } else {
+    lockPasswordHash = '';
+    isLocked = false;
+  }
+  syncLockStateToWindows();
+});
+
+ipcMain.on('request-cancel-lock-dialog', () => {
+  syncLockStateToWindows();
 });
 
 let titleUnreadCount = 0;
@@ -749,6 +876,7 @@ ipcMain.on('chat-list-from-webview', (_event, list) => {
 });
 
 ipcMain.on('selector-pick-chat', (_event, target) => {
+  if (isLocked) return;
   ignoreBlurUntil = Date.now() + 600;
   stopBubbleBlink();
   hidePreviewBubble();
@@ -766,7 +894,7 @@ ipcMain.on('preview-bubble-clicked', (_event, target) => {
   stopBubbleBlink();
   hidePreviewBubble();
   openChatNearBubble();
-  if (target && (target.name || typeof target.index === 'number')) {
+  if (!isLocked && target && (target.name || typeof target.index === 'number')) {
     if (chatWin && !chatWin.isDestroyed()) {
       chatWin.webContents.send('forward-pick-chat', target);
     }
@@ -833,6 +961,26 @@ ipcMain.on('bubble-contextmenu', () => {
       label: chatWin && chatWin.isVisible() ? 'Sohbeti Gizle (Alt+W)' : 'Sohbeti Aç (Alt+W)',
       click: () => toggleChat()
     },
+    {
+      label: isLocked ? '🔓 Kilit Ekranını Aç (Alt+L)' : '🔒 WhatsApp\'ı Şifreyle Kilitle (Alt+L)',
+      click: () => {
+        if (isLocked) {
+          openChatNearBubble();
+        } else {
+          requestLockWhatsApp();
+        }
+      }
+    },
+    {
+      label: lockPasswordHash ? '🔑 Kilit Şifresini Değiştir / Kaldır' : '🔑 Kilit Şifresi Oluştur',
+      click: () => {
+        ignoreBlurUntil = Date.now() + 800;
+        openChatNearBubble();
+        if (chatWin && !chatWin.isDestroyed()) {
+          chatWin.webContents.send(lockPasswordHash ? 'open-lock-change' : 'open-lock-setup');
+        }
+      }
+    },
     { type: 'separator' },
     {
       label: '📌 Sohbeti Sabitle (Otomatik Gizlemeyi Kapat)',
@@ -884,10 +1032,22 @@ ipcMain.on('bubble-contextmenu', () => {
 app.whenReady().then(() => {
   createWindows();
 
+  if (chatWin) {
+    chatWin.webContents.on('did-finish-load', () => {
+      syncLockStateToWindows();
+    });
+  }
+  if (bubbleWin) {
+    bubbleWin.webContents.on('did-finish-load', () => {
+      syncLockStateToWindows();
+    });
+  }
+
   // Başlangıçta baloncuğun hemen yanında sohbet penceresini ve dikey avatar sütununu açarak göster
   ignoreBlurUntil = Date.now() + 3000;
   setTimeout(() => {
     openChatNearBubble();
+    syncLockStateToWindows();
   }, 400);
 
   // Sessiz Otomatik Güncelleme Kontrolü: Başlangıçta (3 sn sonra) ve her 2 dakikada bir
@@ -898,6 +1058,11 @@ app.whenReady().then(() => {
   globalShortcut.register('Alt+W', () => {
     ignoreBlurUntil = Date.now() + 600;
     toggleChat();
+  });
+
+  // Global Kısayol: Alt + L ile her yerden anında şifreyle kilitle
+  globalShortcut.register('Alt+L', () => {
+    requestLockWhatsApp();
   });
 });
 

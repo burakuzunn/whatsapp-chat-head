@@ -82,6 +82,106 @@
     border: none;
     background: #111b21;
   }
+
+  /* Şifreli Kilit Ekranı (WhatsApp App Lock) */
+  .lock-overlay {
+    position: fixed;
+    inset: 0;
+    background: #111b21;
+    z-index: 9999;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    text-align: center;
+    border-radius: 10px;
+  }
+  .lock-overlay.visible {
+    display: flex;
+  }
+  .lock-card {
+    width: 100%;
+    max-width: 320px;
+    background: #202c33;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    padding: 26px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .lock-icon-circle {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: rgba(0, 168, 132, 0.16);
+    color: #00a884;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin-bottom: 4px;
+  }
+  .lock-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #e9edef;
+  }
+  .lock-desc {
+    font-size: 12.5px;
+    color: #8696a0;
+    line-height: 1.4;
+    margin-bottom: 4px;
+  }
+  .lock-input {
+    width: 100%;
+    background: #111b21;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #e9edef;
+    font-size: 13.5px;
+    outline: none;
+    text-align: center;
+    user-select: text;
+  }
+  .lock-input:focus {
+    border-color: #00a884;
+  }
+  .lock-error {
+    font-size: 12px;
+    color: #ff453a;
+    min-height: 16px;
+  }
+  .lock-submit-btn {
+    width: 100%;
+    background: #00a884;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #111b21;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .lock-submit-btn:hover {
+    background: #06cf9c;
+  }
+  .lock-secondary-btn {
+    background: transparent;
+    border: none;
+    color: #8696a0;
+    font-size: 11.5px;
+    cursor: pointer;
+    margin-top: 4px;
+    text-decoration: underline;
+  }
+  .lock-secondary-btn:hover {
+    color: #e9edef;
+  }
 </style>
 </head>
 <body>
@@ -92,9 +192,24 @@
       </button>
     </div>
     <div class="tb-group">
+      <button class="tb-btn icon-only" id="btnLock" title="WhatsApp'ı Şifreyle Kilitle (Alt+L)">🔒</button>
       <button class="tb-btn icon-only" id="btnBlur" title="Gizlilik Modu (Mesajları Bulanıklaştır)">👁️</button>
       <button class="tb-btn icon-only" id="btnPin" title="Pencereyi Sabitle (Otomatik Gizlemeyi Kapat)">📌</button>
       <button class="tb-btn icon-only" id="btnHide" title="Baloncuğa Küçült (Alt+W)">➖</button>
+    </div>
+  </div>
+
+  <!-- Şifreli Kilit Ekranı -->
+  <div class="lock-overlay" id="lockOverlay">
+    <div class="lock-card">
+      <div class="lock-icon-circle">🔒</div>
+      <div class="lock-title" id="lockTitle">WhatsApp Kilitli</div>
+      <div class="lock-desc" id="lockDesc">Sohbetlerinize erişmek için kilit şifrenizi girin.</div>
+      <input type="password" class="lock-input" id="lockInputCurrent" placeholder="Şifrenizi girin..." />
+      <input type="password" class="lock-input" id="lockInputNew" placeholder="Yeni şifre belirleyin..." style="display: none;" />
+      <div class="lock-error" id="lockError"></div>
+      <button class="lock-submit-btn" id="btnLockSubmit">Kilidi Aç</button>
+      <button class="lock-secondary-btn" id="btnLockCancel" style="display: none;">İptal</button>
     </div>
   </div>
 
@@ -111,9 +226,18 @@
 
     const webview = document.getElementById('waWebview');
     const btnOpenSelector = document.getElementById('btnOpenSelector');
+    const btnLock = document.getElementById('btnLock');
     const btnBlur = document.getElementById('btnBlur');
     const btnPin = document.getElementById('btnPin');
     const btnHide = document.getElementById('btnHide');
+    const lockOverlay = document.getElementById('lockOverlay');
+    const lockTitle = document.getElementById('lockTitle');
+    const lockDesc = document.getElementById('lockDesc');
+    const lockInputCurrent = document.getElementById('lockInputCurrent');
+    const lockInputNew = document.getElementById('lockInputNew');
+    const lockError = document.getElementById('lockError');
+    const btnLockSubmit = document.getElementById('btnLockSubmit');
+    const btnLockCancel = document.getElementById('btnLockCancel');
 
     const preloadUrl = pathToFileURL(path.join(__dirname, 'preload-chat.js')).href;
     webview.setAttribute('preload', preloadUrl);
@@ -124,6 +248,7 @@
     webview.setAttribute('src', 'https://web.whatsapp.com');
 
     let isBlurred = false;
+    let lockMode = 'unlock'; // 'unlock' | 'setup' | 'change'
 
     // Pencerede SADECE aktif sohbet (#main) görünür; sol liste arka planda görünmez tutularak
     // harici seçim kutusuna canlı veri sağlar.
@@ -140,15 +265,15 @@
         max-width: 100% !important;
       }
 
-      /* Sol dikey ikon şeridi ve sol sohbet listesini (#side) arka planda görünmez tut */
-      header:not(#main header),
-      div:has(> #side),
-      .two > div:not(:has(#main)) {
+      /* Sadece #main açıkken ve tam görünüm kapalıyken sol sohbet listesini (#side) arka planda görünmez tut */
+      html:not(.wa-show-full-ui) body:has(#main) header:not(#main header),
+      html:not(.wa-show-full-ui) body:has(#main) div:has(> #side),
+      html:not(.wa-show-full-ui) body:has(#main) .two > div:not(:has(#main)) {
         opacity: 0 !important;
         pointer-events: none !important;
       }
 
-      div:has(> #side) {
+      html:not(.wa-show-full-ui) body:has(#main) div:has(> #side) {
         position: fixed !important;
         left: 0 !important;
         top: 0 !important;
@@ -158,7 +283,7 @@
       }
 
       /* Sadece sağdaki sohbet ekranı (#main) pencerenin %100'ünü kaplasın */
-      div:has(> #main) {
+      html:not(.wa-show-full-ui) body:has(#main) div:has(> #main) {
         position: fixed !important;
         left: 0 !important;
         top: 0 !important;
@@ -177,7 +302,7 @@
         pointer-events: auto !important;
       }
 
-      #main {
+      html:not(.wa-show-full-ui) body:has(#main) #main {
         display: flex !important;
         flex-direction: column !important;
         flex: 1 1 100% !important;
@@ -220,6 +345,120 @@
         height: 5px !important;
       }
     `;
+
+    function openLockOverlay(mode) {
+      lockMode = mode;
+      lockError.textContent = '';
+      lockInputCurrent.value = '';
+      lockInputNew.value = '';
+
+      if (mode === 'setup') {
+        lockTitle.textContent = 'WhatsApp Şifreli Kilit';
+        lockDesc.textContent = 'WhatsApp sohbetlerinizi ve bildirimlerinizi korumak için bir kilit şifresi belirleyin.';
+        lockInputCurrent.style.display = 'none';
+        lockInputNew.style.display = 'block';
+        lockInputNew.placeholder = 'Yeni şifre belirleyin...';
+        btnLockSubmit.textContent = 'Şifrele ve Kilitle';
+        btnLockCancel.style.display = 'inline-block';
+        btnLockCancel.textContent = 'İptal';
+        lockOverlay.classList.add('visible');
+        setTimeout(() => lockInputNew.focus(), 50);
+      } else if (mode === 'change') {
+        lockTitle.textContent = 'Kilit Şifresini Değiştir';
+        lockDesc.textContent = 'Mevcut şifrenizi ve yeni şifrenizi girin (Şifreyi kaldırmak için yeni şifreyi boş bırakın).';
+        lockInputCurrent.style.display = 'block';
+        lockInputCurrent.placeholder = 'Mevcut şifreniz...';
+        lockInputNew.style.display = 'block';
+        lockInputNew.placeholder = 'Yeni şifre (kaldırmak için boş)...';
+        btnLockSubmit.textContent = 'Kaydet';
+        btnLockCancel.style.display = 'inline-block';
+        btnLockCancel.textContent = 'İptal';
+        lockOverlay.classList.add('visible');
+        setTimeout(() => lockInputCurrent.focus(), 50);
+      } else {
+        lockTitle.textContent = 'WhatsApp Kilitli';
+        lockDesc.textContent = 'Sohbetlerinize erişmek için kilit şifrenizi girin.';
+        lockInputCurrent.style.display = 'block';
+        lockInputCurrent.placeholder = 'Şifrenizi girin...';
+        lockInputNew.style.display = 'none';
+        btnLockSubmit.textContent = 'Kilidi Aç';
+        btnLockCancel.style.display = 'inline-block';
+        btnLockCancel.textContent = 'Şifreyi Değiştir';
+        lockOverlay.classList.add('visible');
+        setTimeout(() => lockInputCurrent.focus(), 50);
+      }
+    }
+
+    function submitLockForm() {
+      lockError.textContent = '';
+      if (lockMode === 'setup') {
+        const newPass = lockInputNew.value.trim();
+        if (!newPass) {
+          lockError.textContent = 'Lütfen bir şifre girin.';
+          return;
+        }
+        ipcRenderer.send('lock-set-password', newPass);
+      } else if (lockMode === 'change') {
+        const curPass = lockInputCurrent.value.trim();
+        const newPass = lockInputNew.value.trim();
+        ipcRenderer.send('lock-change-password', { currentPassword: curPass, newPassword: newPass });
+      } else {
+        const pass = lockInputCurrent.value.trim();
+        ipcRenderer.send('lock-verify-password', pass);
+      }
+    }
+
+    btnLock.addEventListener('click', () => {
+      ipcRenderer.send('request-lock-whatsapp');
+    });
+
+    btnLockSubmit.addEventListener('click', submitLockForm);
+
+    lockInputCurrent.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (lockMode === 'change') {
+          lockInputNew.focus();
+        } else {
+          submitLockForm();
+        }
+      }
+    });
+
+    lockInputNew.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        submitLockForm();
+      }
+    });
+
+    btnLockCancel.addEventListener('click', () => {
+      if (lockMode === 'unlock') {
+        openLockOverlay('change');
+      } else {
+        ipcRenderer.send('request-cancel-lock-dialog');
+      }
+    });
+
+    ipcRenderer.on('lock-state-updated', (_event, state) => {
+      if (state.isLocked) {
+        btnLock.classList.add('active');
+        openLockOverlay('unlock');
+      } else {
+        btnLock.classList.remove('active');
+        lockOverlay.classList.remove('visible');
+      }
+    });
+
+    ipcRenderer.on('open-lock-setup', () => {
+      openLockOverlay('setup');
+    });
+
+    ipcRenderer.on('open-lock-change', () => {
+      openLockOverlay('change');
+    });
+
+    ipcRenderer.on('lock-error-message', (_event, msg) => {
+      lockError.textContent = msg || 'Hatalı şifre!';
+    });
 
     // "👥 Sohbet Seç" butonuna basıldığında Harici Seçim Kutusunu (selectorWin) aç/kapat
     btnOpenSelector.addEventListener('click', () => {

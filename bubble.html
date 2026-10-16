@@ -126,6 +126,9 @@
   body.expanded .avatar-dock {
     display: flex;
   }
+  body.locked .avatar-dock {
+    display: none !important;
+  }
 
   .avatar-item {
     position: relative;
@@ -370,6 +373,10 @@
       } else {
         pinDot.classList.remove('visible');
       }
+    });
+
+    ipcRenderer.on('update-lock-state', (_event, locked) => {
+      document.body.classList.toggle('locked', Boolean(locked));
     });
   </script>
 </body>

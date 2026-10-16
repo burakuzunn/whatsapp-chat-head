@@ -264,6 +264,12 @@
       } catch (_) {}
     });
 
+    ipcRenderer.on('forward-viewing-state', (_event, viewing) => {
+      try {
+        webview.send('host-viewing-state', viewing);
+      } catch (_) {}
+    });
+
     webview.addEventListener('dom-ready', () => {
       webview.insertCSS(CHAT_ONLY_CSS).catch(() => {});
     });

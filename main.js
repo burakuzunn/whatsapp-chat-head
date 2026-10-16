@@ -19,17 +19,25 @@ const CHROME_UA =
 const BUBBLE_SIZE = 72;
 const CHAT_WIDTH = 480;
 const CHAT_HEIGHT = 700;
+const PREVIEW_WIDTH = 260;
+const PREVIEW_HEIGHT = 76;
 const GAP = 10;
 
 let bubbleWin = null;
 let chatWin = null;
 let selectorWin = null;
+let previewWin = null;
+let previewHideTimer = null;
 let cachedChatList = [];
 let isQuitting = false;
 let isPinned = false;
 let isMuted = false;
 let lastUnreadCount = 0;
 let ignoreBlurUntil = 0;
+let hasInitializedChatState = false;
+const prevChatStateMap = new Map();
+let lastPreviewKey = '';
+let lastPreviewTime = 0;
 
 // Sürükleme durumu (Main Process)
 let dragInterval = null;
@@ -100,6 +108,113 @@ function isCursorInsideWindow(win) {
     cursor.y >= b.y &&
     cursor.y <= b.y + b.height
   );
+}
+
+function stopBubbleBlink() {
+  if (bubbleWin && !bubbleWin.isDestroyed()) {
+    bubbleWin.webContents.send('stop-blink');
+  }
+}
+
+function startBubbleBlink(tooltipText) {
+  if (bubbleWin && !bubbleWin.isDestroyed()) {
+    bubbleWin.webContents.send('trigger-pulse', tooltipText || 'Yeni mesaj');
+  }
+}
+
+function positionPreviewWindow() {
+  if (!bubbleWin || !previewWin || bubbleWin.isDestroyed() || previewWin.isDestroyed()) {
+    return 'right';
+  }
+  const bubbleBounds = bubbleWin.getBounds();
+  const bubbleCenter = {
+    x: bubbleBounds.x + Math.round(BUBBLE_SIZE / 2),
+    y: bubbleBounds.y + Math.round(BUBBLE_SIZE / 2)
+  };
+  const display = screen.getDisplayNearestPoint(bubbleCenter);
+  const workArea = display.workArea;
+  const screenMidX = workArea.x + workArea.width / 2;
+
+  let targetX;
+  let tailDirection;
+  if (bubbleCenter.x >= screenMidX) {
+    targetX = bubbleBounds.x - PREVIEW_WIDTH + 2;
+    tailDirection = 'right';
+  } else {
+    targetX = bubbleBounds.x + BUBBLE_SIZE - 2;
+    tailDirection = 'left';
+  }
+
+  targetX = Math.max(
+    workArea.x + 4,
+    Math.min(targetX, workArea.x + workArea.width - PREVIEW_WIDTH - 4)
+  );
+  const targetY = Math.max(
+    workArea.y + 4,
+    Math.min(bubbleBounds.y - 4, workArea.y + workArea.height - PREVIEW_HEIGHT - 4)
+  );
+
+  previewWin.setBounds({
+    x: Math.round(targetX),
+    y: Math.round(targetY),
+    width: PREVIEW_WIDTH,
+    height: PREVIEW_HEIGHT
+  });
+
+  return tailDirection;
+}
+
+function hidePreviewBubble() {
+  if (previewHideTimer) {
+    clearTimeout(previewHideTimer);
+    previewHideTimer = null;
+  }
+  if (previewWin && !previewWin.isDestroyed() && previewWin.isVisible()) {
+    previewWin.hide();
+  }
+}
+
+function showPreviewBubble(data) {
+  if (!previewWin || previewWin.isDestroyed()) return;
+  const tailDirection = positionPreviewWindow();
+  previewWin.webContents.send('show-preview-data', {
+    name: data.name || 'WhatsApp',
+    body: data.body || 'Yeni mesaj',
+    avatar: data.avatar || '',
+    index: data.index,
+    tailDirection
+  });
+  previewWin.showInactive();
+
+  if (previewHideTimer) clearTimeout(previewHideTimer);
+  previewHideTimer = setTimeout(() => {
+    hidePreviewBubble();
+  }, 6000);
+}
+
+function onNewIncomingMessage(data) {
+  const name = String(data?.name || 'WhatsApp').trim();
+  const body = String(data?.body || 'Yeni mesaj').trim();
+  const key = `${name}::${body}`;
+  const now = Date.now();
+  if (key === lastPreviewKey && now - lastPreviewTime < 2000) {
+    return;
+  }
+  lastPreviewKey = key;
+  lastPreviewTime = now;
+
+  // Eğer sohbet penceresi şu an açık ve odaktaysa yanıp sönmeye gerek yok, değilse yanıp sönsün
+  const isActivelyLooking =
+    chatWin && !chatWin.isDestroyed() && chatWin.isVisible() && chatWin.isFocused();
+  if (!isActivelyLooking) {
+    startBubbleBlink(`${name}: ${body}`);
+  }
+  showPreviewBubble({
+    name,
+    body,
+    avatar: data?.avatar || '',
+    index: data?.index
+  });
 }
 
 // Harici Sohbet Seçim Kutusunu (selectorWin) ana sohbet penceresinin hemen yanına hizala
@@ -205,12 +320,17 @@ function collapseBubbleToIcon() {
 
 function hideChatWindows() {
   if (selectorWin && !selectorWin.isDestroyed()) selectorWin.hide();
-  if (chatWin && !chatWin.isDestroyed()) chatWin.hide();
+  if (chatWin && !chatWin.isDestroyed()) {
+    chatWin.webContents.send('forward-viewing-state', false);
+    chatWin.hide();
+  }
   collapseBubbleToIcon();
 }
 
 function openChatNearBubble() {
   if (!chatWin || chatWin.isDestroyed()) return;
+  stopBubbleBlink();
+  hidePreviewBubble();
   positionChatWindow();
   if (bubbleWin && !bubbleWin.isDestroyed()) {
     bubbleWin.webContents.send('set-expanded', true);
@@ -220,6 +340,7 @@ function openChatNearBubble() {
   }
   chatWin.show();
   chatWin.focus();
+  chatWin.webContents.send('forward-viewing-state', true);
 }
 
 function toggleChat() {
@@ -234,18 +355,12 @@ function toggleChat() {
 
 function updateUnreadBadge(count) {
   const numericCount = Number(count) || 0;
-  const increased = numericCount > lastUnreadCount;
   lastUnreadCount = numericCount;
 
   if (bubbleWin && !bubbleWin.isDestroyed()) {
     bubbleWin.webContents.send('update-badge', numericCount);
-    if (increased) {
-      bubbleWin.webContents.send(
-        'trigger-pulse',
-        `WhatsApp (${numericCount} okunmamış mesaj)`
-      );
-    } else if (numericCount === 0) {
-      bubbleWin.webContents.send('trigger-pulse', 'WhatsApp Sohbet Baloncuğu (Alt + W)');
+    if (numericCount === 0) {
+      stopBubbleBlink();
     }
   }
 }
@@ -370,6 +485,40 @@ function createWindows() {
   selectorWin.setAlwaysOnTop(true, 'pop-up-menu');
   selectorWin.loadFile(path.join(__dirname, 'selector.html'));
 
+  // 4. PENCERE: Yeni Mesaj Konuşma Balonu Önizlemesi (previewWin - WhatsApp ikonunun yanında çıkar)
+  previewWin = new BrowserWindow({
+    width: PREVIEW_WIDTH,
+    height: PREVIEW_HEIGHT,
+    show: false,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    hasShadow: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  previewWin.setAlwaysOnTop(true, 'screen-saver');
+  previewWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  previewWin.loadFile(path.join(__dirname, 'preview.html'));
+
+  chatWin.on('focus', () => {
+    stopBubbleBlink();
+    hidePreviewBubble();
+    if (chatWin && !chatWin.isDestroyed()) {
+      chatWin.webContents.send('forward-viewing-state', true);
+    }
+  });
+
   const handleAnyBlur = () => {
     if (isPinned) return;
     if (Date.now() < ignoreBlurUntil) return;
@@ -380,8 +529,9 @@ function createWindows() {
       const inChat = isCursorInsideWindow(chatWin) || (chatWin && chatWin.isFocused());
       const inSelector =
         isCursorInsideWindow(selectorWin) || (selectorWin && selectorWin.isFocused());
+      const inPreview = isCursorInsideWindow(previewWin);
 
-      if (inBubble || inChat || inSelector) {
+      if (inBubble || inChat || inSelector || inPreview) {
         return;
       }
 
@@ -410,6 +560,13 @@ function createWindows() {
   bubbleWin.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
+    }
+  });
+
+  previewWin.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      previewWin.hide();
     }
   });
 }
@@ -443,6 +600,8 @@ function stopDragLoop() {
 
 ipcMain.on('bubble-mousedown', () => {
   if (!bubbleWin || bubbleWin.isDestroyed()) return;
+  stopBubbleBlink();
+  hidePreviewBubble();
   dragStartCursor = screen.getCursorScreenPoint();
   dragStartBounds = bubbleWin.getBounds();
   movedBeyondThreshold = false;
@@ -524,6 +683,38 @@ let titleUnreadCount = 0;
 
 ipcMain.on('chat-list-from-webview', (_event, list) => {
   if (Array.isArray(list)) {
+    // Yeni gelen okunmamış mesajları tespit et ve sohbet balonu önizlemesi göster
+    if (hasInitializedChatState) {
+      for (const item of list) {
+        const curUnread = Number(item.unread) || 0;
+        const curPreview = String(item.preview || '').trim();
+        const prev = prevChatStateMap.get(item.name);
+
+        if (
+          curUnread > 0 &&
+          (!prev || curUnread > prev.unread || (curPreview && curPreview !== prev.preview))
+        ) {
+          onNewIncomingMessage({
+            name: item.name,
+            body: curPreview || 'Yeni mesaj',
+            avatar: item.avatar || '',
+            index: item.index
+          });
+          break;
+        }
+      }
+    }
+
+    for (const item of list) {
+      prevChatStateMap.set(item.name, {
+        unread: Number(item.unread) || 0,
+        preview: String(item.preview || '').trim()
+      });
+    }
+    if (list.length > 0) {
+      hasInitializedChatState = true;
+    }
+
     cachedChatList = list;
     const listUnreadTotal = cachedChatList.reduce(
       (sum, item) => sum + (Number(item.unread) || 0),
@@ -542,12 +733,26 @@ ipcMain.on('chat-list-from-webview', (_event, list) => {
 
 ipcMain.on('selector-pick-chat', (_event, target) => {
   ignoreBlurUntil = Date.now() + 600;
+  stopBubbleBlink();
+  hidePreviewBubble();
   if (chatWin && !chatWin.isDestroyed()) {
     chatWin.webContents.send('forward-pick-chat', target);
     chatWin.focus();
   }
   if (selectorWin && !selectorWin.isDestroyed() && selectorWin.isVisible()) {
     selectorWin.hide();
+  }
+});
+
+ipcMain.on('preview-bubble-clicked', (_event, target) => {
+  ignoreBlurUntil = Date.now() + 800;
+  stopBubbleBlink();
+  hidePreviewBubble();
+  openChatNearBubble();
+  if (target && (target.name || typeof target.index === 'number')) {
+    if (chatWin && !chatWin.isDestroyed()) {
+      chatWin.webContents.send('forward-pick-chat', target);
+    }
   }
 });
 
@@ -561,13 +766,19 @@ ipcMain.on('selector-scroll-more', () => {
 ipcMain.on('whatsapp-notification', (_event, payload) => {
   const sender = payload?.title || 'WhatsApp';
   const body = payload?.body || 'Yeni mesaj';
+  const matched = cachedChatList.find((c) => c.name === sender);
 
-  if (bubbleWin && !bubbleWin.isDestroyed()) {
-    bubbleWin.webContents.send('trigger-pulse', `${sender}: ${body}`);
-  }
+  onNewIncomingMessage({
+    name: sender,
+    body,
+    avatar: matched?.avatar || '',
+    index: matched?.index
+  });
 });
 
 ipcMain.on('notification-clicked', () => {
+  stopBubbleBlink();
+  hidePreviewBubble();
   openChatNearBubble();
 });
 

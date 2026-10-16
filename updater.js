@@ -11,6 +11,7 @@ const CORE_FILES = [
   'updater.js',
   'release.js',
   'bubble.html',
+  'preview.html',
   'chat.html',
   'selector.html',
   'setup.js',

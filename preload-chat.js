@@ -11,6 +11,7 @@ if (!window.__waPreloadInitialized) {
 
   const notificationUnreadMap = new Map();
   let lastSelectedChatName = '';
+  let isHostWindowViewing = false;
 
   contextBridge.exposeInMainWorld('__waBridge', {
     sendNotification: (payload) => {
@@ -20,8 +21,9 @@ if (!window.__waPreloadInitialized) {
           const activeHeader = (
             document.querySelector('#main header span[dir="auto"]')?.textContent || ''
           ).trim();
-          if (! document.hasFocus() || sender !== activeHeader) {
-            notificationUnreadMap.set(sender, (notificationUnreadMap.get(sender) || 0) + 1);
+          if ((!document.hasFocus() && !isHostWindowViewing) || sender !== activeHeader) {
+            const prev = notificationUnreadMap.get(sender)?.count || 0;
+            notificationUnreadMap.set(sender, { count: prev + 1, time: Date.now() });
           }
         }
       } catch (_) {}
@@ -176,7 +178,7 @@ if (!window.__waPreloadInitialized) {
       document.querySelector('#main header span[dir="auto"]')?.textContent || ''
     ).trim();
 
-    if (activeHeaderTitle && document.hasFocus()) {
+    if (activeHeaderTitle && (document.hasFocus() || isHostWindowViewing)) {
       notificationUnreadMap.delete(activeHeaderTitle);
     }
 
@@ -255,10 +257,17 @@ if (!window.__waPreloadInitialized) {
         }
 
         const domUnread = detectRowUnreadCount(row, rowRect, time);
-        if (domUnread === 0 && activeHeaderTitle === name && document.hasFocus()) {
+        const notifEntry = notificationUnreadMap.get(name);
+        if (domUnread > 0) {
           notificationUnreadMap.delete(name);
+        } else if (notifEntry) {
+          if (activeHeaderTitle === name && (document.hasFocus() || isHostWindowViewing)) {
+            notificationUnreadMap.delete(name);
+          } else if (activeHeaderTitle !== name && Date.now() - notifEntry.time > 2500) {
+            notificationUnreadMap.delete(name);
+          }
         }
-        const unread = Math.max(domUnread, notificationUnreadMap.get(name) || 0);
+        const unread = Math.max(domUnread, notificationUnreadMap.get(name)?.count || 0);
 
         const isRowSelected =
           row.getAttribute('aria-selected') === 'true' ||
@@ -376,6 +385,19 @@ if (!window.__waPreloadInitialized) {
 
   ipcRenderer.on('request-chat-list', () => {
     sendChatListUpdate();
+  });
+
+  ipcRenderer.on('host-viewing-state', (_event, viewing) => {
+    isHostWindowViewing = Boolean(viewing);
+    if (isHostWindowViewing) {
+      const activeHeader = (
+        document.querySelector('#main header span[dir="auto"]')?.textContent || ''
+      ).trim();
+      if (activeHeader) {
+        notificationUnreadMap.delete(activeHeader);
+      }
+      sendChatListUpdate();
+    }
   });
 
   ipcRenderer.on('pick-chat-in-webview', (_event, target) => {

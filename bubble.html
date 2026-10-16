@@ -230,19 +230,19 @@
     let isPointerDown = false;
     let activeChatName = '';
     let currentBadgeCount = 0;
-    let tempBlinkTimer = null;
 
-    function syncBlinkState() {
-      if (currentBadgeCount > 0 || tempBlinkTimer !== null) {
-        bubbleBtn.classList.add('unread-blink');
-      } else {
-        bubbleBtn.classList.remove('unread-blink');
-      }
+    function startBlink() {
+      bubbleBtn.classList.add('unread-blink');
+    }
+
+    function stopBlink() {
+      bubbleBtn.classList.remove('unread-blink');
     }
 
     bubble.addEventListener('mousedown', (e) => {
       if (e.button === 0) {
         isPointerDown = true;
+        stopBlink();
         ipcRenderer.send('bubble-mousedown');
       }
     });
@@ -267,6 +267,17 @@
 
     ipcRenderer.on('set-expanded', (_event, expanded) => {
       document.body.classList.toggle('expanded', Boolean(expanded));
+      if (expanded) {
+        stopBlink();
+      }
+    });
+
+    ipcRenderer.on('start-blink', () => {
+      startBlink();
+    });
+
+    ipcRenderer.on('stop-blink', () => {
+      stopBlink();
     });
 
     ipcRenderer.on('update-chat-list', (_event, list) => {
@@ -314,6 +325,7 @@
 
         item.addEventListener('click', (e) => {
           e.stopPropagation();
+          stopBlink();
           activeChatName = chat.name;
           const existingBadge = item.querySelector('.avatar-badge');
           if (existingBadge) existingBadge.remove();
@@ -341,20 +353,15 @@
       } else {
         badge.textContent = '0';
         badge.classList.remove('visible');
+        stopBlink();
       }
-      syncBlinkState();
     });
 
     ipcRenderer.on('trigger-pulse', (_event, tooltipText) => {
       if (tooltipText) {
         bubble.title = tooltipText;
       }
-      if (tempBlinkTimer) clearTimeout(tempBlinkTimer);
-      tempBlinkTimer = setTimeout(() => {
-        tempBlinkTimer = null;
-        syncBlinkState();
-      }, 6000);
-      syncBlinkState();
+      startBlink();
     });
 
     ipcRenderer.on('update-pin-state', (_event, pinned) => {

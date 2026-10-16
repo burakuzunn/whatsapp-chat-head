@@ -10,11 +10,30 @@ if (!window.__waPreloadInitialized) {
   window.__waPreloadInitialized = true;
 
   const notificationUnreadMap = new Map();
+  const lastRealPreviewMap = new Map();
   let lastSelectedChatName = '';
   let isHostWindowViewing = false;
 
+  function isTypingIndicatorText(text) {
+    const s = String(text || '').trim().toLowerCase();
+    if (!s) return false;
+    return (
+      s === 'yazıyor...' ||
+      s === 'yazıyor' ||
+      s.endsWith(' yazıyor...') ||
+      s.endsWith(' yazıyor') ||
+      s === 'typing...' ||
+      s === 'typing' ||
+      s.endsWith(' typing...') ||
+      s.endsWith(' typing') ||
+      s.includes('ses kaydediyor') ||
+      s.includes('recording audio')
+    );
+  }
+
   contextBridge.exposeInMainWorld('__waBridge', {
     sendNotification: (payload) => {
+      if (isTypingIndicatorText(payload?.body)) return;
       try {
         const sender = String(payload?.title || '').trim();
         if (sender) {
@@ -224,7 +243,7 @@ if (!window.__waPreloadInitialized) {
         let preview = '';
         for (let i = 1; i < titleSpans.length; i++) {
           const t = (titleSpans[i].getAttribute('title') || titleSpans[i].textContent || '').trim();
-          if (t && t !== name) {
+          if (t && t !== name && !isTypingIndicatorText(t)) {
             preview = t;
             break;
           }
@@ -233,11 +252,16 @@ if (!window.__waPreloadInitialized) {
           const allSpans = Array.from(row.querySelectorAll('span[dir="ltr"], span[dir="auto"]'));
           for (const s of allSpans) {
             const txt = (s.textContent || '').trim();
-            if (txt && txt !== name && txt.length > 1) {
+            if (txt && txt !== name && txt.length > 1 && !isTypingIndicatorText(txt)) {
               preview = txt;
               break;
             }
           }
+        }
+        if (preview) {
+          lastRealPreviewMap.set(name, preview);
+        } else {
+          preview = lastRealPreviewMap.get(name) || '';
         }
 
         let time = '';

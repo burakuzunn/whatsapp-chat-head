@@ -192,9 +192,28 @@ function showPreviewBubble(data) {
   }, 6000);
 }
 
+function isTypingIndicatorText(text) {
+  const s = String(text || '').trim().toLowerCase();
+  if (!s) return false;
+  return (
+    s === 'yazıyor...' ||
+    s === 'yazıyor' ||
+    s.endsWith(' yazıyor...') ||
+    s.endsWith(' yazıyor') ||
+    s === 'typing...' ||
+    s === 'typing' ||
+    s.endsWith(' typing...') ||
+    s.endsWith(' typing') ||
+    s.includes('ses kaydediyor') ||
+    s.includes('recording audio')
+  );
+}
+
 function onNewIncomingMessage(data) {
   const name = String(data?.name || 'WhatsApp').trim();
   const body = String(data?.body || 'Yeni mesaj').trim();
+  if (isTypingIndicatorText(body)) return;
+
   const key = `${name}::${body}`;
   const now = Date.now();
   if (key === lastPreviewKey && now - lastPreviewTime < 2000) {
@@ -683,17 +702,15 @@ let titleUnreadCount = 0;
 
 ipcMain.on('chat-list-from-webview', (_event, list) => {
   if (Array.isArray(list)) {
-    // Yeni gelen okunmamış mesajları tespit et ve sohbet balonu önizlemesi göster
+    // Sadece gerçek okunmamış mesaj sayısı arttığında sohbet balonu önizlemesi göster (yazıyor... durumunda gösterme)
     if (hasInitializedChatState) {
       for (const item of list) {
         const curUnread = Number(item.unread) || 0;
         const curPreview = String(item.preview || '').trim();
         const prev = prevChatStateMap.get(item.name);
+        const prevUnread = prev ? prev.unread : 0;
 
-        if (
-          curUnread > 0 &&
-          (!prev || curUnread > prev.unread || (curPreview && curPreview !== prev.preview))
-        ) {
+        if (curUnread > prevUnread && !isTypingIndicatorText(curPreview)) {
           onNewIncomingMessage({
             name: item.name,
             body: curPreview || 'Yeni mesaj',

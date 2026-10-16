@@ -14,6 +14,22 @@ irm https://raw.githubusercontent.com/burakuzunn/whatsapp-chat-head/main/install
 
 ---
 
+## ⬆️ Otomatik Güncelleme Sistemi (GitHub Releases)
+
+Uygulama içinde yerleşik **otomatik güncelleme (`updater.js`)** sistemi bulunur:
+- Uygulama her açılışta ve arka planda her 10 dakikada bir GitHub'daki en son **Release** sürümünü kontrol eder.
+- Ayrıca WhatsApp ikonuna sağ tıklayıp **⬆️ Güncellemeleri Kontrol Et** seçeneğiyle anlık kontrol yapılabilir.
+- GitHub'da yeni bir **Release** yayınlandığında (ör. `v1.0.1`, `v1.1.0`), uygulama yeniden kurulum gerektirmeden sadece değişen dosyaları saniyeler içinde indirip kendini otomatik olarak yeniden başlatır.
+
+### Geliştirici İçin Yeni Sürüm (Release) Yayınlama
+Kodda bir değişiklik yaptıktan sonra tek komutla sürüm numarasını artırıp GitHub Release yayınlamak için:
+```bash
+npm run release
+```
+(Veya belirli bir sürüm etiketiyle: `npm run release -- 1.2.0 "Yeni özellik eklendi"`)
+
+---
+
 ## 🛠️ Git ile Manuel Kurulum
 
 ```bash

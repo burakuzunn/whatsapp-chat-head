@@ -10,6 +10,7 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { getLocalVersion, checkAndApplyUpdate } = require('./updater');
 
 // Güncel Windows Chrome User-Agent (WhatsApp Web tarayıcı uyarısını engeller)
 const CHROME_UA =
@@ -580,6 +581,29 @@ ipcMain.on('hide-chat-from-toolbar', () => {
   hideChatWindows();
 });
 
+function notifyUpdateStatus(msg) {
+  if (bubbleWin && !bubbleWin.isDestroyed()) {
+    bubbleWin.webContents.send('trigger-pulse', msg);
+  }
+  if (chatWin && !chatWin.isDestroyed()) {
+    chatWin.webContents.send('update-status-message', msg);
+  }
+}
+
+function triggerUpdateCheck(manual = false) {
+  if (manual) {
+    notifyUpdateStatus('Güncellemeler kontrol ediliyor...');
+  }
+  checkAndApplyUpdate({
+    app,
+    onStatus: (msg) => notifyUpdateStatus(msg)
+  }).then((res) => {
+    if (manual && res && !res.updated) {
+      notifyUpdateStatus(`Güncel sürüm kullanılıyor (v${getLocalVersion()})`);
+    }
+  });
+}
+
 // IPC: Sağ Tık Menüsü (Context Menu)
 ipcMain.on('bubble-contextmenu', () => {
   const menu = Menu.buildFromTemplate([
@@ -615,6 +639,10 @@ ipcMain.on('bubble-contextmenu', () => {
     },
     { type: 'separator' },
     {
+      label: `⬆️ Güncellemeleri Kontrol Et (v${getLocalVersion()})`,
+      click: () => triggerUpdateCheck(true)
+    },
+    {
       label: '🔄 WhatsApp Web Yenile',
       click: () => {
         if (chatWin && !chatWin.isDestroyed()) {
@@ -643,6 +671,10 @@ app.whenReady().then(() => {
   setTimeout(() => {
     openChatNearBubble();
   }, 400);
+
+  // Otomatik Güncelleme Kontrolü: Başlangıçta (3 sn sonra) ve her 10 dakikada bir GitHub Release kontrolü
+  setTimeout(() => triggerUpdateCheck(false), 3000);
+  setInterval(() => triggerUpdateCheck(false), 10 * 60 * 1000);
 
   // Global Kısayol: Alt + W ile her yerden hızlıca aç/kapat
   globalShortcut.register('Alt+W', () => {

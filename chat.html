@@ -251,6 +251,17 @@
       btnPin.classList.toggle('active', Boolean(pinned));
     });
 
+    ipcRenderer.on('update-status-message', (_event, msg) => {
+      if (!msg) return;
+      const prevText = btnOpenSelector.textContent;
+      btnOpenSelector.textContent = `⬆️ ${msg}`;
+      setTimeout(() => {
+        if (btnOpenSelector.textContent === `⬆️ ${msg}`) {
+          btnOpenSelector.textContent = prevText;
+        }
+      }, 3500);
+    });
+
     // Harici seçim kutusundan bir sohbet seçildiğinde webview içindeki o kişiye tıkla
     ipcRenderer.on('forward-pick-chat', (_event, target) => {
       try {

@@ -987,7 +987,7 @@ ipcMain.on('chat-list-from-webview', (_event, list) => {
     if (bubbleWin && !bubbleWin.isDestroyed()) {
       bubbleWin.webContents.send('update-chat-list', cachedChatList);
     }
-    if (selectorWin && !selectorWin.isDestroyed()) {
+    if (selectorWin && !selectorWin.isDestroyed() && selectorWin.isVisible()) {
       selectorWin.webContents.send('update-chat-list', cachedChatList);
     }
   }

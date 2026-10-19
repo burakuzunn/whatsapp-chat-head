@@ -292,10 +292,23 @@
       stopBlink();
     });
 
+    let lastDockSignature = '';
+
     ipcRenderer.on('update-chat-list', (_event, list) => {
       if (!Array.isArray(list)) return;
+
+      const sig = list
+        .map((c) => {
+          const isActive = Boolean(c.active) || (activeChatName && c.name === activeChatName);
+          return `${c.name}|${Number(c.unread) || 0}|${isActive ? 1 : 0}|${c.avatar ? c.avatar.length : 0}`;
+        })
+        .join(';;');
+
+      if (sig === lastDockSignature) return;
+      lastDockSignature = sig;
+
       const prevScroll = avatarDock.scrollTop;
-      avatarDock.innerHTML = '';
+      const frag = document.createDocumentFragment();
 
       list.forEach((chat) => {
         const item = document.createElement('div');
@@ -351,9 +364,11 @@
           });
         });
 
-        avatarDock.appendChild(item);
+        frag.appendChild(item);
       });
 
+      avatarDock.textContent = '';
+      avatarDock.appendChild(frag);
       avatarDock.scrollTop = prevScroll;
     });
 

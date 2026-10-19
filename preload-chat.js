@@ -156,10 +156,31 @@ if (!window.__waPreloadInitialized) {
     return src.startsWith('http') ? src : '';
   }
 
-  function detectRowUnreadCount(row, rowRect, timeText) {
-    let unread = 0;
+  function tagLayoutContainers() {
+    try {
+      const side = document.getElementById('side');
+      if (side && side.parentElement) {
+        const sideCol = side.parentElement;
+        if (sideCol.getAttribute('data-wa-side-col') !== '1') {
+          sideCol.setAttribute('data-wa-side-col', '1');
+        }
+        const navCol = sideCol.previousElementSibling;
+        if (navCol && navCol.getAttribute('data-wa-nav-col') !== '1') {
+          navCol.setAttribute('data-wa-nav-col', '1');
+        }
+      }
+      const main = document.getElementById('main');
+      if (main && main.parentElement) {
+        const mainCol = main.parentElement;
+        if (mainCol.getAttribute('data-wa-main-col') !== '1') {
+          mainCol.setAttribute('data-wa-main-col', '1');
+        }
+      }
+    } catch (_) {}
+  }
 
-    // 1. aria-label üzerinden okunmamış mesaj sayısını yakala (TR / EN)
+  function detectRowUnreadCount(row) {
+    let unread = 0;
     const ariaEls = row.querySelectorAll('[aria-label]');
     for (const el of ariaEls) {
       const label = (el.getAttribute('aria-label') || '').toLowerCase();
@@ -177,47 +198,14 @@ if (!window.__waPreloadInitialized) {
         }
       }
     }
-
-    // 2. Satırın sağ yarısında yer alan küçük sayı rozeti (span/div) kontrolü
-    if (!unread) {
-      const candidates = row.querySelectorAll('span, div');
-      for (const el of candidates) {
-        if (el.childElementCount === 0) {
-          const txt = (el.textContent || '').trim();
-          if (txt && txt !== timeText && /^\d{1,3}\+?$/.test(txt)) {
-            const r = el.getBoundingClientRect();
-            const inRightHalf = r.left >= rowRect.left + rowRect.width * 0.5;
-            const isBadgeSize = r.width >= 12 && r.width <= 48 && r.height >= 12 && r.height <= 32;
-            if (inRightHalf && isBadgeSize) {
-              const cs = window.getComputedStyle(el);
-              const pcs = el.parentElement ? window.getComputedStyle(el.parentElement) : null;
-              const bg = cs.backgroundColor || '';
-              const pbg = pcs ? pcs.backgroundColor || '' : '';
-              const hasBg =
-                (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') ||
-                (pbg && pbg !== 'rgba(0, 0, 0, 0)' && pbg !== 'transparent');
-              if (hasBg) {
-                unread = parseInt(txt, 10) || 1;
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
     return unread;
   }
 
   // #pane-side içindeki tüm sohbet satırlarını oku ve mesaj sırasına (yukarıdan aşağıya) göre diz
   function scrapeChatList() {
+    tagLayoutContainers();
     const paneSide = document.getElementById('pane-side');
     if (!paneSide) return [];
-
-    // Sohbet listesinin her zaman en güncel mesajlardan (en üstten) başlamasını sağla
-    if (paneSide.scrollTop !== 0) {
-      paneSide.scrollTop = 0;
-    }
 
     const activeHeaderTitle = (
       document.querySelector('#main header span[dir="auto"]')?.textContent || ''
@@ -235,7 +223,7 @@ if (!window.__waPreloadInitialized) {
     const sortedRows = rawRows
       .map((row) => {
         const rect = row.getBoundingClientRect();
-        return { row, top: rect.top, height: rect.height, rect };
+        return { row, top: rect.top, height: rect.height };
       })
       .filter((item) => item.height > 20)
       .sort((a, b) => a.top - b.top);
@@ -243,7 +231,7 @@ if (!window.__waPreloadInitialized) {
     const results = [];
     const seenNames = new Set();
 
-    sortedRows.forEach(({ row, rect: rowRect }, idx) => {
+    sortedRows.forEach(({ row }, idx) => {
       try {
         const titleSpans = Array.from(
           row.querySelectorAll('span[dir="auto"][title], span[title]')
@@ -275,7 +263,7 @@ if (!window.__waPreloadInitialized) {
           }
         }
         if (!preview) {
-          const allSpans = Array.from(row.querySelectorAll('span[dir="ltr"], span[dir="auto"]'));
+          const allSpans = row.querySelectorAll('span[dir="ltr"], span[dir="auto"]');
           for (const s of allSpans) {
             const txt = (s.textContent || '').trim();
             if (txt && txt !== name && txt.length > 1 && !isTypingIndicatorText(txt)) {
@@ -291,11 +279,12 @@ if (!window.__waPreloadInitialized) {
         }
 
         let time = '';
-        const allLeafDivs = Array.from(row.querySelectorAll('div, span'));
-        for (const el of allLeafDivs) {
+        const allLeafSpans = row.querySelectorAll('span, div');
+        for (const el of allLeafSpans) {
           if (el.childElementCount === 0) {
             const txt = (el.textContent || '').trim();
             if (
+              txt.length <= 12 &&
               /^(\d{1,2}:\d{2}(\s?[AP]M)?|Yesterday|Dün|\d{1,2}[./]\d{1,2}[./]\d{2,4})$/i.test(
                 txt
               )
@@ -306,7 +295,7 @@ if (!window.__waPreloadInitialized) {
           }
         }
 
-        const domUnread = detectRowUnreadCount(row, rowRect, time);
+        const domUnread = detectRowUnreadCount(row);
         const notifEntry = notificationUnreadMap.get(name);
         if (domUnread > 0) {
           notificationUnreadMap.delete(name);
@@ -343,11 +332,26 @@ if (!window.__waPreloadInitialized) {
     return results;
   }
 
-  function sendChatListUpdate() {
+  let lastSentSignature = '';
+
+  function sendChatListUpdate(force = false) {
     const list = scrapeChatList();
-    if (list.length > 0) {
-      notifyHost('chat-list-updated', list);
+    if (list.length === 0) return;
+
+    const sig = list
+      .map(
+        (c) =>
+          `${c.name}\t${c.preview}\t${c.time}\t${c.unread}\t${c.active ? 1 : 0}\t${
+            c.avatar ? c.avatar.length : 0
+          }`
+      )
+      .join('\n');
+
+    if (!force && sig === lastSentSignature) {
+      return;
     }
+    lastSentSignature = sig;
+    notifyHost('chat-list-updated', list);
   }
 
   function clickChatRowWithNativeInput(row) {
@@ -459,11 +463,23 @@ if (!window.__waPreloadInitialized) {
   }
 
   ipcRenderer.on('request-chat-list', () => {
-    sendChatListUpdate();
+    sendChatListUpdate(true);
   });
 
   ipcRenderer.on('prepare-paste-in-webview', () => {
     focusActiveComposer();
+  });
+
+  ipcRenderer.on('ensure-chat-selected', () => {
+    const hasMain = Boolean(document.getElementById('main'));
+    const paneSide = document.getElementById('pane-side');
+    if (!hasMain && paneSide) {
+      scrapeChatList();
+      const firstRow = paneSide.querySelector('[data-wa-chat-id="0"]');
+      if (firstRow) {
+        clickChatRowWithNativeInput(firstRow);
+      }
+    }
   });
 
   ipcRenderer.on('host-viewing-state', (_event, viewing) => {
@@ -487,8 +503,21 @@ if (!window.__waPreloadInitialized) {
     const paneSide = document.getElementById('pane-side');
     if (paneSide) {
       paneSide.scrollTop += 320;
-      setTimeout(sendChatListUpdate, 250);
+      setTimeout(() => sendChatListUpdate(true), 250);
     }
+  });
+
+  // Kullanıcı webview içinde etkileşimde bulunduğunda (fare, klavye, kaydırma) 15 sn hareketsizlik sayacını sıfırla
+  let lastActivityReportedAt = 0;
+  function reportUserActivity() {
+    const now = Date.now();
+    if (now - lastActivityReportedAt < 800) return;
+    lastActivityReportedAt = now;
+    notifyHost('user-activity');
+  }
+
+  ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart', 'pointerdown'].forEach((evtName) => {
+    window.addEventListener(evtName, reportUserActivity, { capture: true, passive: true });
   });
 
   // Ctrl+V ile ekran görüntüsü / metin yapıştırılırken odak mesaj kutusunda değilse otomatik odakla
@@ -538,27 +567,19 @@ if (!window.__waPreloadInitialized) {
     true
   );
 
-  let autoOpenedInitialChat = false;
+  let lastLoggedState = null;
 
   window.addEventListener('DOMContentLoaded', () => {
     webFrame.executeJavaScript(mainWorldHook).catch(() => {});
 
     setInterval(() => {
-      const hasMain = Boolean(document.getElementById('main'));
-      const paneSide = document.getElementById('pane-side');
-
-      if (!hasMain && paneSide && !autoOpenedInitialChat) {
-        const list = scrapeChatList();
-        if (list.length > 0) {
-          const firstRow = paneSide.querySelector('[data-wa-chat-id="0"]');
-          if (firstRow) {
-            autoOpenedInitialChat = true;
-            clickChatRowWithNativeInput(firstRow);
-          }
-        }
+      tagLayoutContainers();
+      const isLogged = Boolean(document.getElementById('pane-side') || document.getElementById('side'));
+      if (isLogged !== lastLoggedState) {
+        lastLoggedState = isLogged;
+        notifyHost('wa-login-state', isLogged);
       }
-
-      sendChatListUpdate();
-    }, 1000);
+      sendChatListUpdate(false);
+    }, 1500);
   });
 }

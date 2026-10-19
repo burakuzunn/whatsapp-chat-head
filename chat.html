@@ -183,6 +183,80 @@
     color: #e9edef;
   }
 
+  /* 15 Saniye Hareketsizlik Gizlilik Bekleme Ekranı (Standby Overlay) */
+  .standby-overlay {
+    position: fixed;
+    top: 40px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #111b21;
+    z-index: 8500;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    text-align: center;
+    cursor: pointer;
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+  }
+  .standby-overlay.visible {
+    display: flex;
+  }
+  .standby-card {
+    width: 100%;
+    max-width: 310px;
+    background: #202c33;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 28px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+  .standby-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(0, 168, 132, 0.14);
+    color: #00a884;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    margin-bottom: 4px;
+  }
+  .standby-title {
+    font-size: 16.5px;
+    font-weight: 700;
+    color: #e9edef;
+  }
+  .standby-desc {
+    font-size: 12.5px;
+    color: #8696a0;
+    line-height: 1.45;
+    margin-bottom: 6px;
+  }
+  .standby-wake-btn {
+    width: 100%;
+    background: #00a884;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #111b21;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .standby-wake-btn:hover {
+    background: #06cf9c;
+  }
+
   /* İndirme Bildirim Çubuğu (Toast) */
   .download-toast {
     position: fixed;
@@ -254,6 +328,18 @@
     </div>
   </div>
 
+  <!-- 15 Saniye Hareketsizlik Bekleme Ekranı (Son Sohbeti Gizler) -->
+  <div class="standby-overlay visible" id="standbyOverlay" title="Sohbete dönmek için tıklayın">
+    <div class="standby-card">
+      <div class="standby-icon">🛡️</div>
+      <div class="standby-title">Bekleme Ekranı</div>
+      <div class="standby-desc">
+        Gizliliğiniz için son sohbetiniz gizlendi.<br />Devam etmek için tıklayın veya yandaki listeden bir kişi seçin.
+      </div>
+      <button class="standby-wake-btn" id="btnWakeStandby">Sohbeti Göster</button>
+    </div>
+  </div>
+
   <!-- Şifreli Kilit Ekranı -->
   <div class="lock-overlay" id="lockOverlay">
     <div class="lock-card">
@@ -294,6 +380,8 @@
     const btnBlur = document.getElementById('btnBlur');
     const btnPin = document.getElementById('btnPin');
     const btnHide = document.getElementById('btnHide');
+    const standbyOverlay = document.getElementById('standbyOverlay');
+    const btnWakeStandby = document.getElementById('btnWakeStandby');
     const lockOverlay = document.getElementById('lockOverlay');
     const lockTitle = document.getElementById('lockTitle');
     const lockDesc = document.getElementById('lockDesc');
@@ -320,8 +408,43 @@
     let lastDownloadedPath = '';
     let downloadToastTimer = null;
 
-    // Pencerede aktif sohbet (#main) ve medya yükleme/indirme/önizleme katmanları görünür;
-    // sol sohbet listesi (#side) ekran dışında tutularak harici seçim kutusuna canlı veri sağlar.
+    // 15 Saniye Hareketsizlik (Standby) Yönetimi
+    const INACTIVITY_TIMEOUT_MS = 15000;
+    let inactivityTimer = null;
+    let isWaLoggedIn = true;
+
+    function enterStandbyMode() {
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = null;
+      }
+      if (!isWaLoggedIn) return;
+      standbyOverlay.classList.add('visible');
+    }
+
+    function resetInactivityTimer() {
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+      }
+      inactivityTimer = setTimeout(() => {
+        enterStandbyMode();
+      }, INACTIVITY_TIMEOUT_MS);
+    }
+
+    function exitStandbyMode(shouldEnsureChat = true) {
+      standbyOverlay.classList.remove('visible');
+      resetInactivityTimer();
+      if (shouldEnsureChat) {
+        try {
+          webview.send('ensure-chat-selected');
+          if (!lockOverlay.classList.contains('visible')) {
+            webview.focus();
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Performans için ağır :has() seçicileri yerine preload-chat.js tarafından işaretlenen O(1) data-wa-* özniteliklerini kullan
     const CHAT_ONLY_CSS = `
       #app,
       #app > div,
@@ -337,9 +460,8 @@
 
       /* Sol sohbet listesi (#side) ve en soldaki dikey ikon barını akıştan çıkar,
          ancak scrapeChatList için #side boyutlarını (340x100vh) koru */
-      html:not(.wa-show-full-ui) body:has(#main) div:has(> #side),
-      html:not(.wa-show-full-ui) body:has(#main) .two > div:has(#side):not(:has(#main)),
-      html:not(.wa-show-full-ui) body:has(#main) .three > div:has(#side):not(:has(#main)) {
+      html:not(.wa-show-full-ui) [data-wa-side-col="1"],
+      html:not(.wa-show-full-ui) [data-wa-nav-col="1"] {
         position: fixed !important;
         left: -9999px !important;
         top: 0 !important;
@@ -350,20 +472,8 @@
         z-index: -1 !important;
       }
 
-      html:not(.wa-show-full-ui) body:has(#main) :has(+ div > #side),
-      html:not(.wa-show-full-ui) body:has(#main) .two > :has(~ :has(#side)),
-      html:not(.wa-show-full-ui) body:has(#main) .three > :has(~ :has(#side)),
-      html:not(.wa-show-full-ui) body:has(#main) ._aigs > :has(~ :has(#side)) {
-        position: fixed !important;
-        left: -9999px !important;
-        top: 0 !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-        z-index: -1 !important;
-      }
-
       /* Sağdaki sohbet sütunu ve içindeki medya yükleme/ekran görüntüsü önizleme ekranı tam genişlik alsın */
-      html:not(.wa-show-full-ui) body:has(#main) div:has(> #main) {
+      html:not(.wa-show-full-ui) [data-wa-main-col="1"] {
         flex: 1 1 100% !important;
         width: 100% !important;
         max-width: 100% !important;
@@ -371,7 +481,7 @@
         height: 100% !important;
       }
 
-      html:not(.wa-show-full-ui) body:has(#main) #main {
+      html:not(.wa-show-full-ui) #main {
         width: 100% !important;
         height: 100% !important;
         max-width: 100% !important;
@@ -379,8 +489,7 @@
       }
 
       /* Kişi bilgisi / medya önizleme gibi yan çekmeceler açıldığında dar pencerede tam ekran üstte açılsın */
-      html:not(.wa-show-full-ui) body:has(#main) .two > div:has(#main) ~ div:not(:has(#side)),
-      html:not(.wa-show-full-ui) body:has(#main) .three > div:has(#main) ~ div:not(:has(#side)) {
+      html:not(.wa-show-full-ui) [data-wa-main-col="1"] ~ div:not([data-wa-side-col="1"]) {
         position: absolute !important;
         inset: 0 !important;
         width: 100% !important;
@@ -564,8 +673,31 @@
       btnPin.classList.toggle('active', Boolean(pinned));
     });
 
-    // Harici seçim kutusundan bir sohbet seçildiğinde webview içindeki o kişiye tıkla
+    standbyOverlay.addEventListener('click', () => {
+      exitStandbyMode(true);
+    });
+
+    btnWakeStandby.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exitStandbyMode(true);
+    });
+
+    // Dış pencere (toolbar vb.) üzerindeki etkileşimlerde de 15 sn sayacını sıfırla
+    ['mousemove', 'mousedown', 'keydown', 'wheel'].forEach((evtName) => {
+      window.addEventListener(
+        evtName,
+        () => {
+          if (!standbyOverlay.classList.contains('visible')) {
+            resetInactivityTimer();
+          }
+        },
+        { passive: true }
+      );
+    });
+
+    // Harici seçim kutusundan veya yan avatar sütunundan bir sohbet seçildiğinde bekleme ekranını kaldır ve o kişiye geç
     ipcRenderer.on('forward-pick-chat', (_event, target) => {
+      exitStandbyMode(false);
       try {
         webview.send('pick-chat-in-webview', target);
         if (!lockOverlay.classList.contains('visible')) {
@@ -583,7 +715,14 @@
     ipcRenderer.on('forward-viewing-state', (_event, viewing) => {
       try {
         webview.send('host-viewing-state', viewing);
-        if (viewing && !lockOverlay.classList.contains('visible')) {
+        if (!viewing) {
+          // Pencere kapatıldığında/gizlendiğinde son sohbetin açık kalmaması için bekleme ekranını devreye al
+          enterStandbyMode();
+        } else if (
+          !lockOverlay.classList.contains('visible') &&
+          !standbyOverlay.classList.contains('visible')
+        ) {
+          resetInactivityTimer();
           webview.focus();
         }
       } catch (_) {}
@@ -618,6 +757,13 @@
     // Pencere odaktayken (ancak odak dış çerçevede kaldığında) Ctrl+V basılırsa webview içine ekran görüntüsünü yapıştır
     window.addEventListener('keydown', (e) => {
       if (lockOverlay.classList.contains('visible')) return;
+      if (standbyOverlay.classList.contains('visible')) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          exitStandbyMode(true);
+        }
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'v') {
         if (document.activeElement !== webview) {
           e.preventDefault();
@@ -664,6 +810,17 @@
         ipcRenderer.send('file-dialog-opening');
       } else if (event.channel === 'file-dialog-closed') {
         ipcRenderer.send('file-dialog-closed');
+      } else if (event.channel === 'user-activity') {
+        if (!standbyOverlay.classList.contains('visible')) {
+          resetInactivityTimer();
+        }
+      } else if (event.channel === 'wa-login-state') {
+        const logged = Boolean(event.args[0]);
+        isWaLoggedIn = logged;
+        if (!logged) {
+          // QR kod ekranındaysa bekleme ekranını gizle ki QR okutulabilsin
+          standbyOverlay.classList.remove('visible');
+        }
       }
     });
   </script>

@@ -49,12 +49,38 @@ if (!window.__waPreloadInitialized) {
       notifyHost('whatsapp-notification', payload);
       setTimeout(sendChatListUpdate, 150);
     },
-    notificationClicked: () => notifyHost('notification-clicked')
+    notificationClicked: () => notifyHost('notification-clicked'),
+    fileDialogOpening: () => notifyHost('file-dialog-opening')
   });
 
-  // WhatsApp Web'in Notification API'sini Proxy ile sarmala
+  // WhatsApp Web'in Notification API'sini ve dosya seçici (<input type="file">) tetikleyicisini sarmala
   const mainWorldHook = `
   (function() {
+    if (!window.__waFilePickerHooked) {
+      window.__waFilePickerHooked = true;
+      const origInputClick = HTMLInputElement.prototype.click;
+      HTMLInputElement.prototype.click = function(...args) {
+        try {
+          if (this && this.type === 'file' && window.__waBridge && typeof window.__waBridge.fileDialogOpening === 'function') {
+            window.__waBridge.fileDialogOpening();
+          }
+        } catch (e) {}
+        return origInputClick.apply(this, args);
+      };
+
+      if (typeof window.showOpenFilePicker === 'function') {
+        const origPicker = window.showOpenFilePicker;
+        window.showOpenFilePicker = function(...args) {
+          try {
+            if (window.__waBridge && typeof window.__waBridge.fileDialogOpening === 'function') {
+              window.__waBridge.fileDialogOpening();
+            }
+          } catch (e) {}
+          return origPicker.apply(this, args);
+        };
+      }
+    }
+
     if (window.__waNotificationHooked || !window.Notification) return;
     window.__waNotificationHooked = true;
 
@@ -407,8 +433,37 @@ if (!window.__waPreloadInitialized) {
     }
   }
 
+  function focusActiveComposer() {
+    try {
+      const active = document.activeElement;
+      if (
+        active &&
+        (active.isContentEditable || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+      ) {
+        return;
+      }
+      const footerComposer = document.querySelector('#main footer [contenteditable="true"]');
+      const allVisibleEditables = Array.from(
+        document.querySelectorAll('[contenteditable="true"]')
+      ).filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.left >= 0;
+      });
+      const target =
+        allVisibleEditables.find((el) => !el.closest('#side') && el !== footerComposer) ||
+        footerComposer;
+      if (target) {
+        target.focus();
+      }
+    } catch (_) {}
+  }
+
   ipcRenderer.on('request-chat-list', () => {
     sendChatListUpdate();
+  });
+
+  ipcRenderer.on('prepare-paste-in-webview', () => {
+    focusActiveComposer();
   });
 
   ipcRenderer.on('host-viewing-state', (_event, viewing) => {
@@ -435,6 +490,53 @@ if (!window.__waPreloadInitialized) {
       setTimeout(sendChatListUpdate, 250);
     }
   });
+
+  // Ctrl+V ile ekran görüntüsü / metin yapıştırılırken odak mesaj kutusunda değilse otomatik odakla
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'v') {
+        focusActiveComposer();
+      }
+    },
+    true
+  );
+
+  // Dosya seçici (<input type="file">) açıldığında pencerenin kapanmasını engelle
+  window.addEventListener(
+    'click',
+    (e) => {
+      const target = e.target;
+      if (!target) return;
+      if (
+        (target.tagName === 'INPUT' && target.type === 'file') ||
+        (typeof target.closest === 'function' && target.closest('input[type="file"]'))
+      ) {
+        notifyHost('file-dialog-opening');
+      }
+    },
+    true
+  );
+
+  window.addEventListener(
+    'change',
+    (e) => {
+      if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
+        notifyHost('file-dialog-closed');
+      }
+    },
+    true
+  );
+
+  window.addEventListener(
+    'cancel',
+    (e) => {
+      if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
+        notifyHost('file-dialog-closed');
+      }
+    },
+    true
+  );
 
   let autoOpenedInitialChat = false;
 

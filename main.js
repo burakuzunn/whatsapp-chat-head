@@ -496,15 +496,50 @@ function createWindows() {
     callback({ cancel: false, responseHeaders });
   });
 
-  // Bildirim, medya vb. izinleri otomatik onayla ki WhatsApp bildirimleri sorunsuz tetiklesin
+  // Bildirim, medya ve pano (clipboard) izinlerini otomatik onayla
+  const ALLOWED_PERMISSIONS = [
+    'notifications',
+    'media',
+    'clipboard-read',
+    'clipboard-write',
+    'clipboard-sanitized-write'
+  ];
   waSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    const allowed = ['notifications', 'media', 'clipboard-read', 'clipboard-sanitized-write'];
-    callback(allowed.includes(permission));
+    callback(ALLOWED_PERMISSIONS.includes(permission));
   });
   waSession.setPermissionCheckHandler((_webContents, permission) => {
-    const allowed = ['notifications', 'media', 'clipboard-read', 'clipboard-sanitized-write'];
-    return allowed.includes(permission);
+    return ALLOWED_PERMISSIONS.includes(permission);
   });
+
+  // WhatsApp Web içinden indirilen görsel, video ve belgeleri pencereyi kapatmadan doğrudan İndirilenler klasörüne kaydet
+  if (!waSession.__waDownloadHooked) {
+    waSession.__waDownloadHooked = true;
+    waSession.on('will-download', (_event, item) => {
+      ignoreBlurUntil = Date.now() + 5000;
+      const downloadsDir = app.getPath('downloads');
+      const rawName = String(item.getFilename() || 'whatsapp-medya')
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+        .trim() || 'whatsapp-medya';
+      const parsed = path.parse(rawName);
+      let savePath = path.join(downloadsDir, rawName);
+      let counter = 1;
+      while (fs.existsSync(savePath)) {
+        savePath = path.join(downloadsDir, `${parsed.name} (${counter})${parsed.ext}`);
+        counter++;
+      }
+
+      item.setSavePath(savePath);
+
+      item.once('done', (_e, state) => {
+        if (state === 'completed' && chatWin && !chatWin.isDestroyed()) {
+          chatWin.webContents.send('download-completed', {
+            filename: path.basename(savePath),
+            savePath
+          });
+        }
+      });
+    });
+  }
 
   const initialPos = loadSavedPosition();
   const appIconPath = path.join(__dirname, 'whatsapp.ico');
@@ -686,7 +721,7 @@ function createWindows() {
   });
 }
 
-// Webview içindeki dış bağlantıları varsayılan tarayıcıda aç
+// Webview içindeki dış bağlantıları varsayılan tarayıcıda aç ve sağ tık menüsü (Görsel İndir / Yapıştır) ekle
 app.on('web-contents-created', (_event, contents) => {
   if (contents.getType() === 'webview') {
     contents.setWindowOpenHandler(({ url }) => {
@@ -697,9 +732,74 @@ app.on('web-contents-created', (_event, contents) => {
     });
 
     contents.on('will-navigate', (event, url) => {
-      if (!url.includes('whatsapp.com')) {
+      if (
+        (url.startsWith('http://') || url.startsWith('https://')) &&
+        !url.includes('whatsapp.com')
+      ) {
         event.preventDefault();
         shell.openExternal(url);
+      }
+    });
+
+    contents.on('context-menu', (_e, params) => {
+      const menuTemplate = [];
+
+      if (params.mediaType === 'image' && params.srcURL) {
+        menuTemplate.push(
+          {
+            label: '💾 Görseli İndir',
+            click: () => {
+              ignoreBlurUntil = Date.now() + 4000;
+              contents.downloadURL(params.srcURL);
+            }
+          },
+          {
+            label: '📋 Görseli Panoya Kopyala',
+            click: () => {
+              ignoreBlurUntil = Date.now() + 2000;
+              contents.copyImageAt(params.x, params.y);
+            }
+          }
+        );
+      }
+
+      if (params.isEditable) {
+        if (menuTemplate.length > 0) menuTemplate.push({ type: 'separator' });
+        menuTemplate.push(
+          {
+            label: '📋 Yapıştır (Ctrl+V)',
+            click: () => {
+              ignoreBlurUntil = Date.now() + 2000;
+              contents.paste();
+            }
+          },
+          {
+            label: '✂️ Kes',
+            enabled: Boolean(params.editFlags?.canCut),
+            click: () => contents.cut()
+          },
+          {
+            label: '📄 Kopyala',
+            enabled: Boolean(params.editFlags?.canCopy),
+            click: () => contents.copy()
+          },
+          {
+            label: 'Tümünü Seç',
+            click: () => contents.selectAll()
+          }
+        );
+      } else if (params.selectionText && params.selectionText.trim()) {
+        if (menuTemplate.length > 0) menuTemplate.push({ type: 'separator' });
+        menuTemplate.push({
+          label: '📄 Kopyala',
+          click: () => contents.copy()
+        });
+      }
+
+      if (menuTemplate.length > 0 && chatWin && !chatWin.isDestroyed()) {
+        ignoreBlurUntil = Date.now() + 4000;
+        const ctxMenu = Menu.buildFromTemplate(menuTemplate);
+        ctxMenu.popup({ window: chatWin });
       }
     });
   }
@@ -966,6 +1066,41 @@ ipcMain.on('toggle-pin-from-chat', () => {
 
 ipcMain.on('hide-chat-from-toolbar', () => {
   hideChatWindows();
+});
+
+// Dosya seçme penceresi (Open File Dialog) açıldığında sohbet penceresinin otomatik gizlenmesini engelle
+ipcMain.on('file-dialog-opening', () => {
+  ignoreBlurUntil = Date.now() + 120000;
+});
+
+ipcMain.on('file-dialog-closed', () => {
+  ignoreBlurUntil = Date.now() + 2500;
+  if (chatWin && !chatWin.isDestroyed() && chatWin.isVisible()) {
+    chatWin.focus();
+  }
+});
+
+// İndirilen görseli/dosyayı doğrudan aç veya klasörde göster
+ipcMain.on('open-downloaded-file', (_event, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    ignoreBlurUntil = Date.now() + 4000;
+    shell.openPath(filePath);
+  }
+});
+
+ipcMain.on('show-downloaded-in-folder', (_event, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    ignoreBlurUntil = Date.now() + 4000;
+    shell.showItemInFolder(filePath);
+  }
+});
+
+// Masaüstünden bir dosya/görsel sürüklenip WhatsApp baloncuğunun üzerine getirildiğinde sohbeti otomatik aç
+ipcMain.on('bubble-file-dragenter', () => {
+  ignoreBlurUntil = Date.now() + 10000;
+  if (chatWin && !chatWin.isDestroyed() && !chatWin.isVisible()) {
+    openChatNearBubble();
+  }
 });
 
 function triggerUpdateCheck() {

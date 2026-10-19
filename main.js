@@ -39,6 +39,7 @@ let lockPasswordHash = '';
 let autoStartEnabled = true;
 let lastUnreadCount = 0;
 let ignoreBlurUntil = 0;
+let cursorHasEnteredChat = false;
 let hasInitializedChatState = false;
 const prevChatStateMap = new Map();
 let lastPreviewKey = '';
@@ -63,7 +64,9 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (bubbleWin) {
+    ignoreBlurUntil = Date.now() + 3000;
+    cursorHasEnteredChat = false;
+    if (bubbleWin && !bubbleWin.isDestroyed()) {
       if (!bubbleWin.isVisible()) bubbleWin.show();
       openChatNearBubble();
     }
@@ -422,6 +425,7 @@ function collapseBubbleToIcon() {
 }
 
 function hideChatWindows() {
+  cursorHasEnteredChat = false;
   if (selectorWin && !selectorWin.isDestroyed()) selectorWin.hide();
   if (chatWin && !chatWin.isDestroyed()) {
     chatWin.webContents.send('forward-viewing-state', false);
@@ -432,16 +436,20 @@ function hideChatWindows() {
 
 function openChatNearBubble() {
   if (!chatWin || chatWin.isDestroyed()) return;
+  ignoreBlurUntil = Date.now() + 2500;
   stopBubbleBlink();
   hidePreviewBubble();
   positionChatWindow();
+  cursorHasEnteredChat = isCursorInsideWindow(chatWin);
   if (bubbleWin && !bubbleWin.isDestroyed()) {
     bubbleWin.webContents.send('set-expanded', true);
     if (cachedChatList.length > 0) {
       bubbleWin.webContents.send('update-chat-list', cachedChatList);
     }
   }
+  app.focus({ steal: true });
   chatWin.show();
+  chatWin.moveTop();
   chatWin.focus();
   chatWin.webContents.send('forward-viewing-state', true);
 }
@@ -627,10 +635,11 @@ function createWindows() {
 
   const handleAnyBlur = () => {
     if (isPinned) return;
+    if (!cursorHasEnteredChat) return;
     if (Date.now() < ignoreBlurUntil) return;
 
     setTimeout(() => {
-      if (isPinned || Date.now() < ignoreBlurUntil) return;
+      if (isPinned || !cursorHasEnteredChat || Date.now() < ignoreBlurUntil) return;
       const inBubble = isCursorInsideWindow(bubbleWin) || (bubbleWin && bubbleWin.isFocused());
       const inChat = isCursorInsideWindow(chatWin) || (chatWin && chatWin.isFocused());
       const inSelector =
@@ -1023,7 +1032,7 @@ ipcMain.on('bubble-contextmenu', () => {
       click: (menuItem) => {
         autoStartEnabled = menuItem.checked;
         writeConfigData({ autoStartEnabled });
-        ensureDesktopAndStartupShortcuts(autoStartEnabled);
+        ensureDesktopAndStartupShortcuts(autoStartEnabled, { force: true });
       }
     },
     { type: 'separator' },
@@ -1051,10 +1060,19 @@ ipcMain.on('bubble-contextmenu', () => {
 app.whenReady().then(() => {
   createWindows();
 
-  // Masaüstüne yeşil WhatsApp ikonunu oluştur ve Windows başlangıcına (Auto-Start) kaydet
+  // Masaüstünde WhatsApp kısayolu eksikse oluştur (mevcutsa PowerShell çalıştırmaz)
   setTimeout(() => {
-    ensureDesktopAndStartupShortcuts(autoStartEnabled);
-  }, 100);
+    ensureDesktopAndStartupShortcuts(autoStartEnabled, { force: false });
+  }, 2000);
+
+  // Fare imleci sohbet penceresinin içine girdiğinde kaydet (kendi kendine kapanmayı önler)
+  setInterval(() => {
+    if (!cursorHasEnteredChat && chatWin && !chatWin.isDestroyed() && chatWin.isVisible()) {
+      if (isCursorInsideWindow(chatWin)) {
+        cursorHasEnteredChat = true;
+      }
+    }
+  }, 200);
 
   if (chatWin) {
     chatWin.webContents.on('did-finish-load', () => {
@@ -1068,7 +1086,7 @@ app.whenReady().then(() => {
   }
 
   // Başlangıçta baloncuğun hemen yanında sohbet penceresini ve dikey avatar sütununu açarak göster
-  ignoreBlurUntil = Date.now() + 3000;
+  ignoreBlurUntil = Date.now() + 4000;
   setTimeout(() => {
     openChatNearBubble();
     syncLockStateToWindows();

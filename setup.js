@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 
 const distDir = path.join(__dirname, 'node_modules', 'electron', 'dist');
 const electronExe = path.join(distDir, 'electron.exe');
@@ -30,10 +30,26 @@ function ensureBinary() {
   }
 }
 
-function ensureDesktopAndStartupShortcuts(enableAutoStart = true) {
+function ensureDesktopAndStartupShortcuts(enableAutoStart = true, { force = false, sync = false } = {}) {
   if (process.platform !== 'win32') return;
 
   try {
+    const desktopDir = path.join(process.env.USERPROFILE || '', 'Desktop');
+    const startupDir = path.join(
+      process.env.APPDATA || '',
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      'Startup'
+    );
+    const desktopLnk = path.join(desktopDir, 'WhatsApp.lnk');
+    const startupLnk = path.join(startupDir, 'WhatsApp.lnk');
+
+    if (!force && fs.existsSync(desktopLnk) && (!enableAutoStart || fs.existsSync(startupLnk))) {
+      return;
+    }
+
     const vbsPath = path.join(__dirname, 'baslat.vbs');
     const customIco = path.join(__dirname, 'whatsapp.ico');
     const fallbackExe = fs.existsSync(bubbleExe) ? bubbleExe : electronExe;
@@ -79,16 +95,18 @@ if (${enableAutoStart ? '$true' : '$false'}) {
 `;
 
     const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    execSync(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`, {
-      stdio: 'ignore',
-      windowsHide: true
-    });
+    const cmd = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
+    if (sync) {
+      execSync(cmd, { stdio: 'ignore', windowsHide: true });
+    } else {
+      exec(cmd, { windowsHide: true }, () => {});
+    }
   } catch (_) {}
 }
 
 if (require.main === module) {
   ensureBinary();
-  ensureDesktopAndStartupShortcuts(true);
+  ensureDesktopAndStartupShortcuts(true, { force: true, sync: true });
   console.log('[Kurulum] Masaüstü WhatsApp ikonu ve otomatik başlatma ayarlandı.');
 }
 

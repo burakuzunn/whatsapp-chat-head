@@ -159,21 +159,36 @@ if (!window.__waPreloadInitialized) {
   function tagLayoutContainers() {
     try {
       const side = document.getElementById('side');
-      if (side && side.parentElement) {
-        const sideCol = side.parentElement;
-        if (sideCol.getAttribute('data-wa-side-col') !== '1') {
-          sideCol.setAttribute('data-wa-side-col', '1');
-        }
-        const navCol = sideCol.previousElementSibling;
-        if (navCol && navCol.getAttribute('data-wa-nav-col') !== '1') {
-          navCol.setAttribute('data-wa-nav-col', '1');
-        }
-      }
       const main = document.getElementById('main');
-      if (main && main.parentElement) {
-        const mainCol = main.parentElement;
-        if (mainCol.getAttribute('data-wa-main-col') !== '1') {
-          mainCol.setAttribute('data-wa-main-col', '1');
+      const sideCol = side ? side.parentElement : null;
+      const mainCol = main ? main.parentElement : null;
+
+      if (sideCol && sideCol.getAttribute('data-wa-side-col') !== '1') {
+        sideCol.setAttribute('data-wa-side-col', '1');
+      }
+      if (mainCol && mainCol.getAttribute('data-wa-main-col') !== '1') {
+        mainCol.setAttribute('data-wa-main-col', '1');
+      }
+
+      const layoutRoot = (mainCol && mainCol.parentElement) || (sideCol && sideCol.parentElement);
+      if (layoutRoot) {
+        const children = layoutRoot.children;
+        for (let i = 0; i < children.length; i++) {
+          const child = children[i];
+          if (child === mainCol || child === sideCol) continue;
+          const w = child.offsetWidth;
+          if (w > 0 && w <= 84 && child.querySelector('header, button, [role="button"]')) {
+            if (child.getAttribute('data-wa-nav-col') !== '1') {
+              child.setAttribute('data-wa-nav-col', '1');
+            }
+          } else if (
+            !mainCol ||
+            Boolean(child.compareDocumentPosition(mainCol) & Node.DOCUMENT_POSITION_FOLLOWING)
+          ) {
+            if (child.getAttribute('data-wa-left-drawer') !== '1') {
+              child.setAttribute('data-wa-left-drawer', '1');
+            }
+          }
         }
       }
     } catch (_) {}
@@ -462,8 +477,124 @@ if (!window.__waPreloadInitialized) {
     } catch (_) {}
   }
 
+  let isSidePanelOpen = false;
+  let headerBeforeSidePanel = '';
+
+  function setSidePanelMode(open) {
+    isSidePanelOpen = Boolean(open);
+    tagLayoutContainers();
+    document.documentElement.classList.toggle('wa-show-side-panel', isSidePanelOpen);
+    notifyHost('side-panel-state', isSidePanelOpen);
+    if (isSidePanelOpen) {
+      headerBeforeSidePanel = (
+        document.querySelector('#main header span[dir="auto"]')?.textContent || ''
+      ).trim();
+    } else {
+      setTimeout(() => {
+        focusActiveComposer();
+        sendChatListUpdate(true);
+      }, 100);
+    }
+  }
+
+  function openSidePanelAndSearch() {
+    setSidePanelMode(true);
+    setTimeout(() => {
+      try {
+        const backBtn = document.querySelector(
+          '[data-wa-left-drawer="1"] [data-icon="back"], [data-wa-left-drawer="1"] [aria-label="Geri"], [data-wa-left-drawer="1"] [aria-label="Back"]'
+        );
+        if (backBtn) {
+          const clickable = backBtn.closest('button, [role="button"]') || backBtn;
+          clickable.click();
+        }
+        const searchEditable =
+          document.querySelector('#side [contenteditable="true"]') ||
+          document.querySelector('#side input[type="text"]') ||
+          document.querySelector('#side [role="textbox"]');
+        if (searchEditable) {
+          searchEditable.focus();
+        } else {
+          const searchBtn = document.querySelector(
+            '#side [data-icon="search"], #side [aria-label*="Ara"], #side [aria-label*="Search"]'
+          );
+          if (searchBtn) {
+            (searchBtn.closest('button, [role="button"]') || searchBtn).click();
+            setTimeout(() => {
+              const box = document.querySelector(
+                '#side [contenteditable="true"], #side [role="textbox"]'
+              );
+              if (box) box.focus();
+            }, 80);
+          }
+        }
+      } catch (_) {}
+    }, 60);
+  }
+
+  function openSidePanelAndNewChat() {
+    setSidePanelMode(true);
+    setTimeout(() => {
+      try {
+        const selectors = [
+          '[data-icon="new-chat-outline"]',
+          '[data-icon="new-chat"]',
+          '[title*="Yeni sohbet" i]',
+          '[aria-label*="Yeni sohbet" i]',
+          '[title*="New chat" i]',
+          '[aria-label*="New chat" i]',
+          'header [data-tab="2"]'
+        ];
+        let btn = null;
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            btn = el.closest('button, [role="button"]') || el;
+            break;
+          }
+        }
+        if (btn) {
+          btn.click();
+        }
+        setTimeout(() => {
+          tagLayoutContainers();
+          const editables = Array.from(
+            document.querySelectorAll('[contenteditable="true"], [role="textbox"]')
+          ).filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.left >= 0 && !el.closest('#main');
+          });
+          const drawerSearch = editables.find((el) => !el.closest('#side')) || editables[0];
+          if (drawerSearch) {
+            drawerSearch.focus();
+          }
+        }, 180);
+      } catch (_) {}
+    }, 60);
+  }
+
   ipcRenderer.on('request-chat-list', () => {
     sendChatListUpdate(true);
+  });
+
+  ipcRenderer.on('toggle-side-panel', () => {
+    if (isSidePanelOpen) {
+      setSidePanelMode(false);
+    } else {
+      openSidePanelAndSearch();
+    }
+  });
+
+  ipcRenderer.on('open-side-search', () => {
+    openSidePanelAndSearch();
+  });
+
+  ipcRenderer.on('open-new-chat', () => {
+    openSidePanelAndNewChat();
+  });
+
+  ipcRenderer.on('close-side-panel', () => {
+    setSidePanelMode(false);
   });
 
   ipcRenderer.on('prepare-paste-in-webview', () => {
@@ -496,6 +627,7 @@ if (!window.__waPreloadInitialized) {
   });
 
   ipcRenderer.on('pick-chat-in-webview', (_event, target) => {
+    setSidePanelMode(false);
     selectChatByTarget(target);
   });
 
@@ -506,6 +638,22 @@ if (!window.__waPreloadInitialized) {
       setTimeout(() => sendChatListUpdate(true), 250);
     }
   });
+
+  // Arama veya Yeni Sohbet ekranından bir kişi/sohbet seçildiğinde odak #main'e geçer; otomatik olarak sohbet ekranına dön
+  window.addEventListener(
+    'focusin',
+    (e) => {
+      if (
+        isSidePanelOpen &&
+        e.target &&
+        typeof e.target.closest === 'function' &&
+        e.target.closest('#main')
+      ) {
+        setSidePanelMode(false);
+      }
+    },
+    true
+  );
 
   // Kullanıcı webview içinde etkileşimde bulunduğunda (fare, klavye, kaydırma) 15 sn hareketsizlik sayacını sıfırla
   let lastActivityReportedAt = 0;
@@ -525,13 +673,16 @@ if (!window.__waPreloadInitialized) {
     'keydown',
     (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'v') {
-        focusActiveComposer();
+        if (!isSidePanelOpen) {
+          focusActiveComposer();
+        }
       }
     },
     true
   );
 
   // Dosya seçici (<input type="file">) açıldığında pencerenin kapanmasını engelle
+  // ve sol listeden (#pane-side) bir sohbete tıklandığında otomatik olarak sohbet görünümüne geç
   window.addEventListener(
     'click',
     (e) => {
@@ -542,6 +693,18 @@ if (!window.__waPreloadInitialized) {
         (typeof target.closest === 'function' && target.closest('input[type="file"]'))
       ) {
         notifyHost('file-dialog-opening');
+        return;
+      }
+
+      if (isSidePanelOpen && typeof target.closest === 'function') {
+        const clickedPaneRow = target.closest('#pane-side [role="listitem"], #pane-side [role="row"]');
+        if (clickedPaneRow) {
+          setTimeout(() => {
+            if (document.getElementById('main')) {
+              setSidePanelMode(false);
+            }
+          }, 180);
+        }
       }
     },
     true
@@ -578,6 +741,14 @@ if (!window.__waPreloadInitialized) {
       if (isLogged !== lastLoggedState) {
         lastLoggedState = isLogged;
         notifyHost('wa-login-state', isLogged);
+      }
+      if (isSidePanelOpen) {
+        const curHeader = (
+          document.querySelector('#main header span[dir="auto"]')?.textContent || ''
+        ).trim();
+        if (curHeader && curHeader !== headerBeforeSidePanel) {
+          setSidePanelMode(false);
+        }
       }
       sendChatListUpdate(false);
     }, 1500);

@@ -256,6 +256,27 @@
   .standby-wake-btn:hover {
     background: #06cf9c;
   }
+  .standby-sub-actions {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .standby-sub-btn {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #e9edef;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .standby-sub-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
 
   /* İndirme Bildirim Çubuğu (Toast) */
   .download-toast {
@@ -316,8 +337,11 @@
 <body>
   <div class="toolbar">
     <div class="tb-group">
-      <button class="tb-btn primary" id="btnOpenSelector" title="Harici Kutu Aç ve Başka Sohbet Seç">
-        👥 Sohbet Seç
+      <button class="tb-btn primary" id="btnOpenSelector" title="Tüm Sohbetlerde, Kişilerde ve Mesajlarda Ara (Ctrl+F)">
+        🔍 Sohbet Ara
+      </button>
+      <button class="tb-btn" id="btnNewChat" title="Rehberden Yeni Yazışma veya Grup Başlat (Ctrl+N)">
+        ➕ Yeni Sohbet
       </button>
     </div>
     <div class="tb-group">
@@ -334,9 +358,13 @@
       <div class="standby-icon">🛡️</div>
       <div class="standby-title">Bekleme Ekranı</div>
       <div class="standby-desc">
-        Gizliliğiniz için son sohbetiniz gizlendi.<br />Devam etmek için tıklayın veya yandaki listeden bir kişi seçin.
+        Gizliliğiniz için son sohbetiniz gizlendi.<br />Son sohbete dönebilir, sohbet arayabilir veya yeni bir yazışma başlatabilirsiniz.
       </div>
-      <button class="standby-wake-btn" id="btnWakeStandby">Sohbeti Göster</button>
+      <button class="standby-wake-btn" id="btnWakeStandby">💬 Son Sohbete Dön</button>
+      <div class="standby-sub-actions">
+        <button class="standby-sub-btn" id="btnStandbySearch">🔍 Sohbet Ara</button>
+        <button class="standby-sub-btn" id="btnStandbyNewChat">➕ Yeni Sohbet</button>
+      </div>
     </div>
   </div>
 
@@ -376,12 +404,15 @@
 
     const webview = document.getElementById('waWebview');
     const btnOpenSelector = document.getElementById('btnOpenSelector');
+    const btnNewChat = document.getElementById('btnNewChat');
     const btnLock = document.getElementById('btnLock');
     const btnBlur = document.getElementById('btnBlur');
     const btnPin = document.getElementById('btnPin');
     const btnHide = document.getElementById('btnHide');
     const standbyOverlay = document.getElementById('standbyOverlay');
     const btnWakeStandby = document.getElementById('btnWakeStandby');
+    const btnStandbySearch = document.getElementById('btnStandbySearch');
+    const btnStandbyNewChat = document.getElementById('btnStandbyNewChat');
     const lockOverlay = document.getElementById('lockOverlay');
     const lockTitle = document.getElementById('lockTitle');
     const lockDesc = document.getElementById('lockDesc');
@@ -404,9 +435,21 @@
     webview.setAttribute('src', 'https://web.whatsapp.com');
 
     let isBlurred = false;
+    let isSidePanelVisible = false;
+    let currentUnreadTotal = 0;
     let lockMode = 'unlock'; // 'unlock' | 'setup' | 'change'
     let lastDownloadedPath = '';
     let downloadToastTimer = null;
+
+    function updateSearchButtonLabel() {
+      if (isSidePanelVisible) {
+        btnOpenSelector.textContent = '💬 Sohbete Dön';
+      } else if (currentUnreadTotal > 0) {
+        btnOpenSelector.textContent = `🔍 Sohbet Ara (${currentUnreadTotal})`;
+      } else {
+        btnOpenSelector.textContent = '🔍 Sohbet Ara';
+      }
+    }
 
     // 15 Saniye Hareketsizlik (Standby) Yönetimi
     const INACTIVITY_TIMEOUT_MS = 15000;
@@ -458,10 +501,10 @@
         max-width: 100% !important;
       }
 
-      /* Sol sohbet listesi (#side) ve en soldaki dikey ikon barını akıştan çıkar,
-         ancak scrapeChatList için #side boyutlarını (340x100vh) koru */
-      html:not(.wa-show-full-ui) [data-wa-side-col="1"],
-      html:not(.wa-show-full-ui) [data-wa-nav-col="1"] {
+      /* 1. NORMAL SOHBET MODU: Sol sohbet listesini (#side), sol çekmeceleri ve ikon barını akıştan çıkar */
+      html:not(.wa-show-side-panel) [data-wa-side-col="1"],
+      html:not(.wa-show-side-panel) [data-wa-nav-col="1"],
+      html:not(.wa-show-side-panel) [data-wa-left-drawer="1"] {
         position: fixed !important;
         left: -9999px !important;
         top: 0 !important;
@@ -472,8 +515,7 @@
         z-index: -1 !important;
       }
 
-      /* Sağdaki sohbet sütunu ve içindeki medya yükleme/ekran görüntüsü önizleme ekranı tam genişlik alsın */
-      html:not(.wa-show-full-ui) [data-wa-main-col="1"] {
+      html:not(.wa-show-side-panel) [data-wa-main-col="1"] {
         flex: 1 1 100% !important;
         width: 100% !important;
         max-width: 100% !important;
@@ -481,15 +523,35 @@
         height: 100% !important;
       }
 
-      html:not(.wa-show-full-ui) #main {
+      html:not(.wa-show-side-panel) #main {
         width: 100% !important;
         height: 100% !important;
         max-width: 100% !important;
         min-width: 100% !important;
       }
 
+      /* 2. SOHBET ARA & YENİ SOHBET MODU (wa-show-side-panel):
+         Aktif sohbeti gizle, WhatsApp'ın kendi Arama, Rehber (Yeni Sohbet), Arşiv ve Filtre ekranını tam genişlikte göster */
+      html.wa-show-side-panel [data-wa-main-col="1"] {
+        position: fixed !important;
+        left: -9999px !important;
+        top: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        z-index: -1 !important;
+      }
+
+      html.wa-show-side-panel [data-wa-side-col="1"],
+      html.wa-show-side-panel [data-wa-left-drawer="1"] {
+        flex: 1 1 auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        height: 100% !important;
+      }
+
       /* Kişi bilgisi / medya önizleme gibi yan çekmeceler açıldığında dar pencerede tam ekran üstte açılsın */
-      html:not(.wa-show-full-ui) [data-wa-main-col="1"] ~ div:not([data-wa-side-col="1"]) {
+      html:not(.wa-show-side-panel) [data-wa-main-col="1"] ~ div:not([data-wa-side-col="1"]) {
         position: absolute !important;
         inset: 0 !important;
         width: 100% !important;
@@ -643,12 +705,22 @@
       lockError.textContent = msg || 'Hatalı şifre!';
     });
 
-    // "👥 Sohbet Seç" butonuna basıldığında Harici Seçim Kutusunu (selectorWin) aç/kapat
+    // "🔍 Sohbet Ara" butonuna basıldığında WhatsApp'ın kendi arama ve tüm sohbetler ekranını aç/kapat
     btnOpenSelector.addEventListener('click', () => {
+      exitStandbyMode(false);
       try {
-        webview.send('request-chat-list');
+        webview.send('toggle-side-panel');
+        webview.focus();
       } catch (_) {}
-      ipcRenderer.send('toggle-selector-window');
+    });
+
+    // "➕ Yeni Sohbet" butonuna basıldığında WhatsApp'ın kendi rehber/yeni yazışma başlatma ekranını aç
+    btnNewChat.addEventListener('click', () => {
+      exitStandbyMode(false);
+      try {
+        webview.send('open-new-chat');
+        webview.focus();
+      } catch (_) {}
     });
 
     btnBlur.addEventListener('click', () => {
@@ -682,6 +754,25 @@
       exitStandbyMode(true);
     });
 
+    // Bekleme ekranından son sohbeti göstermeden doğrudan "Sohbet Ara" veya "Yeni Sohbet" ekranına geçiş
+    btnStandbySearch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exitStandbyMode(false);
+      try {
+        webview.send('open-side-search');
+        webview.focus();
+      } catch (_) {}
+    });
+
+    btnStandbyNewChat.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exitStandbyMode(false);
+      try {
+        webview.send('open-new-chat');
+        webview.focus();
+      } catch (_) {}
+    });
+
     // Dış pencere (toolbar vb.) üzerindeki etkileşimlerde de 15 sn sayacını sıfırla
     ['mousemove', 'mousedown', 'keydown', 'wheel'].forEach((evtName) => {
       window.addEventListener(
@@ -695,7 +786,7 @@
       );
     });
 
-    // Harici seçim kutusundan veya yan avatar sütunundan bir sohbet seçildiğinde bekleme ekranını kaldır ve o kişiye geç
+    // Yan avatar sütunundan bir sohbet seçildiğinde bekleme ekranını kaldır ve o kişiye geç
     ipcRenderer.on('forward-pick-chat', (_event, target) => {
       exitStandbyMode(false);
       try {
@@ -754,9 +845,28 @@
       downloadToast.classList.remove('visible');
     });
 
-    // Pencere odaktayken (ancak odak dış çerçevede kaldığında) Ctrl+V basılırsa webview içine ekran görüntüsünü yapıştır
+    // Klavye kısayolları: Ctrl+F / Ctrl+K (Sohbet Ara), Ctrl+N (Yeni Sohbet), Ctrl+V (Görsel Yapıştır)
     window.addEventListener('keydown', (e) => {
       if (lockOverlay.classList.contains('visible')) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key) {
+        const k = e.key.toLowerCase();
+        if (k === 'f' || k === 'k') {
+          e.preventDefault();
+          exitStandbyMode(false);
+          webview.send('open-side-search');
+          webview.focus();
+          return;
+        }
+        if (k === 'n') {
+          e.preventDefault();
+          exitStandbyMode(false);
+          webview.send('open-new-chat');
+          webview.focus();
+          return;
+        }
+      }
+
       if (standbyOverlay.classList.contains('visible')) {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -764,6 +874,7 @@
         }
         return;
       }
+
       if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'v') {
         if (document.activeElement !== webview) {
           e.preventDefault();
@@ -790,11 +901,13 @@
       const match = title.match(/\((\d+)\)/);
       if (match && match[1]) {
         const count = parseInt(match[1], 10);
+        currentUnreadTotal = count;
         ipcRenderer.send('unread-count-updated', count);
-        btnOpenSelector.textContent = `👥 Sohbet Seç (${count})`;
+        updateSearchButtonLabel();
       } else if (title.includes('WhatsApp')) {
+        currentUnreadTotal = 0;
         ipcRenderer.send('unread-count-updated', 0);
-        btnOpenSelector.textContent = '👥 Sohbet Seç';
+        updateSearchButtonLabel();
       }
     });
 
@@ -814,6 +927,10 @@
         if (!standbyOverlay.classList.contains('visible')) {
           resetInactivityTimer();
         }
+      } else if (event.channel === 'side-panel-state') {
+        isSidePanelVisible = Boolean(event.args[0]);
+        btnOpenSelector.classList.toggle('active', isSidePanelVisible);
+        updateSearchButtonLabel();
       } else if (event.channel === 'wa-login-state') {
         const logged = Boolean(event.args[0]);
         isWaLoggedIn = logged;

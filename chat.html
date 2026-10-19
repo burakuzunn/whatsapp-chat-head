@@ -353,12 +353,12 @@
   </div>
 
   <!-- 15 Saniye Hareketsizlik Bekleme Ekranı (Son Sohbeti Gizler) -->
-  <div class="standby-overlay visible" id="standbyOverlay" title="Sohbete dönmek için tıklayın">
+  <div class="standby-overlay" id="standbyOverlay" title="Sohbete dönmek için tıklayın">
     <div class="standby-card">
       <div class="standby-icon">🛡️</div>
       <div class="standby-title">Bekleme Ekranı</div>
       <div class="standby-desc">
-        Gizliliğiniz için son sohbetiniz gizlendi.<br />Son sohbete dönebilir, sohbet arayabilir veya yeni bir yazışma başlatabilirsiniz.
+        15 saniye hareketsiz kaldığınız için gizliliğiniz adına son sohbetiniz gizlendi.<br />Sohbete dönebilir, sohbet arayabilir veya yeni bir yazışma başlatabilirsiniz.
       </div>
       <button class="standby-wake-btn" id="btnWakeStandby">💬 Son Sohbete Dön</button>
       <div class="standby-sub-actions">
@@ -436,13 +436,14 @@
 
     let isBlurred = false;
     let isSidePanelVisible = false;
+    let hasActiveChat = false;
     let currentUnreadTotal = 0;
     let lockMode = 'unlock'; // 'unlock' | 'setup' | 'change'
     let lastDownloadedPath = '';
     let downloadToastTimer = null;
 
     function updateSearchButtonLabel() {
-      if (isSidePanelVisible) {
+      if (isSidePanelVisible && hasActiveChat) {
         btnOpenSelector.textContent = '💬 Sohbete Dön';
       } else if (currentUnreadTotal > 0) {
         btnOpenSelector.textContent = `🔍 Sohbet Ara (${currentUnreadTotal})`;
@@ -461,7 +462,7 @@
         clearTimeout(inactivityTimer);
         inactivityTimer = null;
       }
-      if (!isWaLoggedIn) return;
+      if (!isWaLoggedIn || !hasActiveChat || isSidePanelVisible) return;
       standbyOverlay.classList.add('visible');
     }
 
@@ -469,20 +470,18 @@
       if (inactivityTimer) {
         clearTimeout(inactivityTimer);
       }
+      if (!hasActiveChat) return;
       inactivityTimer = setTimeout(() => {
         enterStandbyMode();
       }, INACTIVITY_TIMEOUT_MS);
     }
 
-    function exitStandbyMode(shouldEnsureChat = true) {
+    function exitStandbyMode(shouldFocus = true) {
       standbyOverlay.classList.remove('visible');
       resetInactivityTimer();
-      if (shouldEnsureChat) {
+      if (shouldFocus && !lockOverlay.classList.contains('visible')) {
         try {
-          webview.send('ensure-chat-selected');
-          if (!lockOverlay.classList.contains('visible')) {
-            webview.focus();
-          }
+          webview.focus();
         } catch (_) {}
       }
     }
@@ -501,12 +500,12 @@
         max-width: 100% !important;
       }
 
-      /* 1. NORMAL SOHBET MODU: Sol sohbet listesini (#side), sol çekmeceleri ve ikon barını akıştan çıkar */
-      html:not(.wa-show-side-panel) [data-wa-side-col="1"],
-      html:not(.wa-show-side-panel) [data-wa-nav-col="1"],
-      html:not(.wa-show-side-panel) [data-wa-left-drawer="1"] {
+      /* 1. AKTİF SOHBET MODU (Bir sohbet seçiliyken ve Arama/Yeni Sohbet açık değilken):
+         #side sütununu görünmez olarak arka planda tut (Chromium'un #pane-side listesini dondurmaması için left:0'da kalır),
+         #main sütununu ise pencerenin tamamına (inset: 0, z-index: 10) yay. */
+      html.wa-has-active-chat:not(.wa-show-side-panel) [data-wa-side-col="1"] {
         position: fixed !important;
-        left: -9999px !important;
+        left: 0 !important;
         top: 0 !important;
         width: 340px !important;
         height: 100vh !important;
@@ -515,49 +514,56 @@
         z-index: -1 !important;
       }
 
-      html:not(.wa-show-side-panel) [data-wa-main-col="1"] {
-        flex: 1 1 100% !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-        height: 100% !important;
-      }
-
-      html:not(.wa-show-side-panel) #main {
-        width: 100% !important;
-        height: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-      }
-
-      /* 2. SOHBET ARA & YENİ SOHBET MODU (wa-show-side-panel):
-         Aktif sohbeti gizle, WhatsApp'ın kendi Arama, Rehber (Yeni Sohbet), Arşiv ve Filtre ekranını tam genişlikte göster */
-      html.wa-show-side-panel [data-wa-main-col="1"] {
+      html.wa-has-active-chat:not(.wa-show-side-panel) [data-wa-main-col="1"] {
         position: fixed !important;
-        left: -9999px !important;
+        inset: 0 !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        min-width: 100vw !important;
+        height: 100vh !important;
+        z-index: 10 !important;
+        background: #111b21 !important;
+      }
+
+      html.wa-has-active-chat:not(.wa-show-side-panel) #main {
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100% !important;
+        min-width: 100% !important;
+      }
+
+      /* Kişi bilgisi / grup bilgisi / mesaj içi arama gibi sağ çekmeceler açıldığında tam ekran üstte açılsın */
+      html.wa-has-active-chat:not(.wa-show-side-panel) [data-wa-main-col="1"] ~ div:not([data-wa-side-col="1"]) {
+        position: fixed !important;
+        inset: 0 !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100vh !important;
+        z-index: 20 !important;
+      }
+
+      /* 2. BAŞLANGIÇ EKRANI (Henüz sohbet seçilmemişken) VEYA SOHBET ARA / YENİ SOHBET MODU (wa-show-side-panel):
+         Sağdaki karşılama ekranını veya aktif sohbeti gizle, sol sohbet listesini / arama ekranını tam genişlikte göster. */
+      html:not(.wa-has-active-chat) [data-wa-side-col="1"] ~ div,
+      html.wa-show-side-panel [data-wa-side-col="1"] ~ div {
+        position: fixed !important;
+        left: 0 !important;
         top: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
         opacity: 0 !important;
         pointer-events: none !important;
         z-index: -1 !important;
       }
 
-      html.wa-show-side-panel [data-wa-side-col="1"],
-      html.wa-show-side-panel [data-wa-left-drawer="1"] {
+      html:not(.wa-has-active-chat) [data-wa-side-col="1"],
+      html.wa-show-side-panel [data-wa-side-col="1"] {
         flex: 1 1 auto !important;
         width: 100% !important;
         max-width: 100% !important;
         min-width: 0 !important;
         height: 100% !important;
-      }
-
-      /* Kişi bilgisi / medya önizleme gibi yan çekmeceler açıldığında dar pencerede tam ekran üstte açılsın */
-      html:not(.wa-show-side-panel) [data-wa-main-col="1"] ~ div:not([data-wa-side-col="1"]) {
-        position: absolute !important;
-        inset: 0 !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        height: 100% !important;
-        z-index: 200 !important;
       }
 
       /* Mesaj Balonları & Yazma Alanı */
@@ -709,7 +715,11 @@
     btnOpenSelector.addEventListener('click', () => {
       exitStandbyMode(false);
       try {
-        webview.send('toggle-side-panel');
+        if (!hasActiveChat) {
+          webview.send('open-side-search');
+        } else {
+          webview.send('toggle-side-panel');
+        }
         webview.focus();
       } catch (_) {}
     });
@@ -807,8 +817,7 @@
       try {
         webview.send('host-viewing-state', viewing);
         if (!viewing) {
-          // Pencere kapatıldığında/gizlendiğinde son sohbetin açık kalmaması için bekleme ekranını devreye al
-          enterStandbyMode();
+          resetInactivityTimer();
         } else if (
           !lockOverlay.classList.contains('visible') &&
           !standbyOverlay.classList.contains('visible')
@@ -927,9 +936,15 @@
         if (!standbyOverlay.classList.contains('visible')) {
           resetInactivityTimer();
         }
+      } else if (event.channel === 'active-chat-state') {
+        hasActiveChat = Boolean(event.args[0]);
+        updateSearchButtonLabel();
+        if (hasActiveChat && !standbyOverlay.classList.contains('visible')) {
+          resetInactivityTimer();
+        }
       } else if (event.channel === 'side-panel-state') {
         isSidePanelVisible = Boolean(event.args[0]);
-        btnOpenSelector.classList.toggle('active', isSidePanelVisible);
+        btnOpenSelector.classList.toggle('active', isSidePanelVisible && hasActiveChat);
         updateSearchButtonLabel();
       } else if (event.channel === 'wa-login-state') {
         const logged = Boolean(event.args[0]);

@@ -15,6 +15,7 @@ const CORE_FILES = [
   'chat.html',
   'selector.html',
   'setup.js',
+  'whatsapp.ico',
   'baslat.vbs',
   'kur-ve-baslat.bat',
   'install.ps1',

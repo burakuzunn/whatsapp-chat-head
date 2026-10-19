@@ -12,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { getLocalVersion, checkAndApplyUpdate } = require('./updater');
+const { ensureDesktopAndStartupShortcuts } = require('./setup');
 
 // Güncel Windows Chrome User-Agent (WhatsApp Web tarayıcı uyarısını engeller)
 const CHROME_UA =
@@ -35,6 +36,7 @@ let isPinned = false;
 let isMuted = false;
 let isLocked = false;
 let lockPasswordHash = '';
+let autoStartEnabled = true;
 let lastUnreadCount = 0;
 let ignoreBlurUntil = 0;
 let hasInitializedChatState = false;
@@ -100,6 +102,9 @@ function loadSavedPosition() {
     if (lockPasswordHash && data.isLocked) {
       isLocked = true;
     }
+    if (typeof data.autoStartEnabled === 'boolean') {
+      autoStartEnabled = data.autoStartEnabled;
+    }
     if (typeof data.x === 'number' && typeof data.y === 'number') {
       const display = screen.getDisplayNearestPoint({ x: data.x, y: data.y });
       const wa = display.workArea;
@@ -129,7 +134,8 @@ function saveBubblePosition() {
       x: b.x,
       y: b.y,
       passwordHash: lockPasswordHash,
-      isLocked
+      isLocked,
+      autoStartEnabled
     });
   } catch (_) {}
 }
@@ -493,6 +499,7 @@ function createWindows() {
   });
 
   const initialPos = loadSavedPosition();
+  const appIconPath = path.join(__dirname, 'whatsapp.ico');
 
   // 1. PENCERE: Yüzen Baloncuk + Dikey Sohbet Avatarları Penceresi (bubbleWin)
   bubbleWin = new BrowserWindow({
@@ -500,6 +507,7 @@ function createWindows() {
     height: BUBBLE_SIZE,
     x: initialPos.x,
     y: initialPos.y,
+    icon: appIconPath,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -524,6 +532,7 @@ function createWindows() {
   chatWin = new BrowserWindow({
     width: CHAT_WIDTH,
     height: CHAT_HEIGHT,
+    icon: appIconPath,
     show: false,
     frame: false,
     alwaysOnTop: true,
@@ -1007,6 +1016,16 @@ ipcMain.on('bubble-contextmenu', () => {
         }
       }
     },
+    {
+      label: '🚀 Bilgisayar Açıldığında Otomatik Başlat',
+      type: 'checkbox',
+      checked: autoStartEnabled,
+      click: (menuItem) => {
+        autoStartEnabled = menuItem.checked;
+        writeConfigData({ autoStartEnabled });
+        ensureDesktopAndStartupShortcuts(autoStartEnabled);
+      }
+    },
     { type: 'separator' },
     {
       label: '🔄 WhatsApp Web Yenile',
@@ -1031,6 +1050,11 @@ ipcMain.on('bubble-contextmenu', () => {
 
 app.whenReady().then(() => {
   createWindows();
+
+  // Masaüstüne yeşil WhatsApp ikonunu oluştur ve Windows başlangıcına (Auto-Start) kaydet
+  setTimeout(() => {
+    ensureDesktopAndStartupShortcuts(autoStartEnabled);
+  }, 100);
 
   if (chatWin) {
     chatWin.webContents.on('did-finish-load', () => {
